@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Verbesserungs-Lauf: wertet die bisherigen Läufe aus und schlägt Änderungen am Playbook vor.
-# Erwartet: REPO (Factory-Repo), GH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN (oder ANTHROPIC_API_KEY), MODEL
+# Erwartet: REPO (Factory-Repo), GH_TOKEN, AGENT (opencode|claude), MODEL, OPENROUTER_API_KEY
 # Daten unter /data (nur lesend), Arbeitsordner /work.
 set -euo pipefail
 : "${REPO:?}"
-MODEL="${MODEL:-opus}"
+MODEL="${MODEL:-openrouter/z-ai/glm-4.6}"
+export AGENT="${AGENT:-opencode}"
 export PHASE=improve
 
 gh auth setup-git >/dev/null
@@ -27,14 +28,12 @@ RUNS=$(ls /data/runs 2>/dev/null | wc -l)
 LINES=$(wc -l < /data/metrics.jsonl 2>/dev/null || echo 0)
 echo "[improve] $LINES Läufe in den Metriken, $RUNS Zusammenfassungen, Branch $BRANCH"
 
+cat > /work/prompt.md <<PROMPT
+Werte die bisherigen Läufe der Software Factory aus und schlage Verbesserungen vor, wie im Verbesserungs-Playbook beschrieben. Factory-Repo: $REPO (geklont unter /work/repo, Branch $BRANCH, Standard-Branch $DEFAULT_BRANCH). Daten: /data/metrics.jsonl ($LINES Läufe) und /data/runs ($RUNS Zusammenfassungen).
+PROMPT
+
 set +e
-claude -p "Werte die bisherigen Läufe der Software Factory aus und schlage Verbesserungen vor, wie im Verbesserungs-Playbook beschrieben. Factory-Repo: $REPO (geklont unter /work/repo, Branch $BRANCH, Standard-Branch $DEFAULT_BRANCH). Daten: /data/metrics.jsonl ($LINES Läufe) und /data/runs ($RUNS Zusammenfassungen)." \
-  --append-system-prompt-file "$PLAYBOOK" \
-  --model "$MODEL" \
-  --dangerously-skip-permissions \
-  --output-format stream-json --verbose \
-  > /work/claude.jsonl 2> /work/claude.err
+PROMPT_FILE=/work/prompt.md PLAYBOOK="$PLAYBOOK" OUT=/work/result.json factory-agent
 CODE=$?
 set -e
-tail -n 1 /work/claude.jsonl | jq -r '"Ergebnis: " + ((.result // "-") | tostring | .[0:800])' 2>/dev/null || true
 exit $CODE

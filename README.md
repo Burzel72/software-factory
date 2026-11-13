@@ -1,8 +1,15 @@
 # Software Factory
 
-Eine Software Factory mit Claude Code, die rund um die Uhr auf deinem eigenen Server läuft.
+Eine Software Factory, die rund um die Uhr auf deinem eigenen Server läuft.
 
-> 🖥️ **Server:** Die Factory läuft auf einem Linux-VPS. Getestet ist sie auf dem **Hostinger KVM 2** (2 CPU-Kerne, 8 GB RAM) mit der Vorlage „Ubuntu 24.04 mit Claude Code“.
+> 🔓 **Diese Variante: OpenCode statt Claude Code.** Der Agent im Job-Container ist
+> [OpenCode](https://opencode.ai) (MIT), die Modelle kommen über
+> [OpenRouter](https://openrouter.ai). Claude Code bleibt optional
+> (`--build-arg WITH_CLAUDE=1`). Einrichtung: **[docs/opencode-openrouter.md](docs/opencode-openrouter.md)**.
+> Läuft genauso auf einem eigenen Proxmox-Server wie auf einem VPS: eine Ubuntu-24.04-VM
+> mit 4 vCPU, 8–12 GB RAM und Docker genügt, `setup.sh` installiert alles Weitere.
+
+> 🖥️ **Server:** Upstream getestet auf einem Hostinger-VPS mit der Vorlage „Ubuntu 24.04 mit Claude Code“. Für diese Variante gilt das nicht: jeder Ubuntu-24.04-Rechner mit Docker reicht, auch eine VM auf dem eigenen Proxmox. Die Links darunter sind Affiliate-Links von Upstream und hier nicht nötig.
 > Server holen: **[hostinger.com/alexclaude](https://hostinger.com/alexclaude)**. Mit dem Code **`ALEXCLAUDE`** sparst du zusätzlich 10 %.
 > Einrichtung Schritt für Schritt: **[docs/hostinger-vps-setup.md](docs/hostinger-vps-setup.md)**
 >
@@ -51,9 +58,9 @@ Eigener Docker-Container pro Issue
 
 ## Voraussetzungen
 
-- Ein Linux-Server mit Ubuntu 24.04, mindestens 2 vCPU und 8 GB RAM
-- Ein Claude-Abo (Pro, Max, Team oder Enterprise) **oder** ein Anthropic-API-Key
-- Ein GitHub-Account
+* Ein Linux-Server mit Ubuntu 24.04, mindestens 2 vCPU und 8 GB RAM (VM im LAN genügt)
+* Ein API-Key für das Modell — bei dieser Variante ein **OpenRouter**-Key (oder ein Anthropic-API-Key für den Rückfallweg)
+* Ein GitHub-Account
 
 ## Schnellstart
 

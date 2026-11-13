@@ -1,6 +1,7 @@
 // Software Factory – Runner
 // Läuft dauerhaft auf dem Server. Holt GitHub Issues mit dem Label "factory",
-// startet pro Issue einen Docker-Container mit Claude Code und hält Labels und Board aktuell.
+// startet pro Issue einen Docker-Container mit dem Agenten (OpenCode oder Claude Code)
+// und hält Labels und Board aktuell.
 // Er schreibt selbst nie Code. Das macht der Agent im Container.
 
 import {
@@ -14,7 +15,12 @@ export type Config = {
   label: string;
   /** Wie viele Agent-Läufe gleichzeitig, über alle Phasen und Repos (Prüfung, Bau, Abnahme, Verbesserung) */
   maxParallel: number;
+  /** Agent im Job-Container. Standard: opencode. "claude" = Claude Code (Rückfallweg). */
+  agent: "opencode" | "claude";
+  /** Modell-Kennung des Agenten, z. B. "openrouter/z-ai/glm-4.6" oder "opus" */
   model: string;
+  /** Umgebungsvariable mit dem API-Key, die an die Jobs gegeben wird. Standard je nach Agent. */
+  apiKeyEnv?: string;
   workflow: string;
   pollSeconds: number;
   jobTimeoutMinutes: number;
@@ -72,11 +78,25 @@ function log(event: string, data: Record<string, unknown> = {}) {
 
 export function loadConfig(path = CONFIG_PATH): Config {
   const c = JSON.parse(readFileSync(path, "utf8"));
-  return {
-    label: "factory", maxParallel: 2, model: "opus", workflow: "starter-kit", pollSeconds: 60,
+  const cfg: Config = {
+    label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
     jobTimeoutMinutes: 90, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
     containerMemory: "3g", maxReworks: 2, ...c,
   };
+  // Ohne Modell in der Config: passender Standard je Agent
+  if (!cfg.model) cfg.model = cfg.agent === "claude" ? "opus" : "openrouter/z-ai/glm-4.6";
+  return cfg;
+}
+
+/**
+ * Welche Umgebungsvariable trägt den Modell-Zugang? Der Runner gibt genau diese an den
+ * Job-Container weiter, damit kein anderer Key im Container landet.
+ */
+function authEnvName(cfg: Config): string | null {
+  if (cfg.apiKeyEnv) return cfg.apiKeyEnv;
+  if (cfg.agent === "claude") return process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY";
+  const candidates = ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZAI_API_KEY"];
+  return candidates.find((k) => !!process.env[k]) ?? null;
 }
 
 async function run(cmd: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number } = {}): Promise<string> {
@@ -370,14 +390,15 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
   await syncBoard(cfg, issue.url, status);
 
   const ghToken = (await gh(["auth", "token"])).trim();
-  const authVar = process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY";
+  const authVar = authEnvName(cfg);
+  if (!authVar) throw new Error(`Kein API-Key für Agent "${cfg.agent}" in der Umgebung (siehe secrets.env)`);
   await docker(["rm", "-f", name]).catch(() => {});
   await docker([
     "run", "-d", "--name", name,
     "--label", "software-factory=1", "--label", `sf.repo=${repo}`, "--label", `sf.issue=${issue.number}`, "--label", `sf.phase=${phase}`, "--label", `sf.mode=${mode}`,
     ...agentLimits(cfg),
     "-e", `REPO=${repo}`, "-e", `ISSUE=${issue.number}`, "-e", `BRANCH=factory/${issue.number}`,
-    "-e", `MODEL=${cfg.model}`, "-e", `WORKFLOW=${cfg.workflow}`, "-e", `PHASE=${phase}`,
+    "-e", `MODEL=${cfg.model}`, "-e", `AGENT=${cfg.agent}`, "-e", `WORKFLOW=${cfg.workflow}`, "-e", `PHASE=${phase}`,
     "-e", "GH_TOKEN", "-e", authVar, // Werte kommen aus der Umgebung, nicht aus der Kommandozeile
     "-v", `${dir}:/work`, ...scenarioMount,
     await imageFor(cfg, repo),
@@ -409,9 +430,15 @@ async function checkBuild(repo: string, issue: number, dir: string, prUrl?: stri
 async function finish(cfg: Config, c: Container, reason?: string) {
   const dir = jobDir(cfg, c.repo, c.issue);
   const status: { status?: string; step?: string; pr?: string; unresolved?: boolean } = readJobJson(join(dir, "status.json")) ?? {};
-  let result: any = {};
-  const tail = readJobFile(join(dir, "claude.jsonl"), 500_000) ?? "";
-  try { result = JSON.parse(tail.trim().split("\n").pop() ?? ""); } catch {}
+  // Der Agent-Adapter im Image schreibt ein normalisiertes /work/result.json —
+  // damit ist der Runner unabhängig davon, welcher Agent gelaufen ist.
+  let result: any = readJobJson(join(dir, "result.json")) ?? {};
+  if (!result || typeof result !== "object" || Object.keys(result).length === 0) {
+    // Rückfallweg für ältere Images (Claude Code schrieb claude.jsonl im stream-json-Format)
+    result = {};
+    const tail = readJobFile(join(dir, "claude.jsonl"), 500_000) ?? "";
+    try { result = JSON.parse(tail.trim().split("\n").pop() ?? ""); } catch {}
+  }
 
   const endStates: Record<Phase, string[]> = {
     check: ["approved", "question", "rejected", "failed"],
@@ -420,7 +447,10 @@ async function finish(cfg: Config, c: Container, reason?: string) {
   };
   let problem = reason ?? null;
   if (!problem && !(status.status && endStates[c.phase].includes(status.status))) problem = "Der Lauf hat kein Ergebnis gemeldet.";
-  if (!problem && (c.exitCode !== 0 || result.is_error)) problem = `Claude Code wurde mit einem Fehler beendet (Exit-Code ${c.exitCode}).`;
+  if (!problem && (c.exitCode !== 0 || result.is_error)) {
+    const was = cfg.agent === "claude" ? "Claude Code" : "OpenCode";
+    problem = `${was} wurde mit einem Fehler beendet (Exit-Code ${c.exitCode}).`;
+  }
   if (!problem && c.phase === "build" && status.status === "accepting") problem = await checkBuild(c.repo, c.issue, dir, status.pr);
   const ended = !problem;
   const metricStatus = ended ? (status.status === "review" && status.unresolved ? "unresolved" : status.status) : "failed";
@@ -430,7 +460,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     minutes: result.duration_ms ? Math.round(result.duration_ms / 60000) : null,
     turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null,
   });
-  const errTail = redact(readJobFile(join(dir, "claude.err"), 1500) ?? "");
+  const errTail = redact(readJobFile(join(dir, "agent.err"), 1500) ?? readJobFile(join(dir, "claude.err"), 1500) ?? "");
   // Kurze Zusammenfassung des Laufs dauerhaft festhalten: Grundlage für den Verbesserungs-Lauf
   try {
     const runsDir = join(cfg.dataDir, "runs");
@@ -629,10 +659,11 @@ async function maybeImprove(cfg: Config, freeSlots: number) {
   if (!existsSync(metrics)) writeFileSync(metrics, "");
   chownSync(work, CONTAINER_UID, CONTAINER_UID);
   const ghToken = (await gh(["auth", "token"])).trim();
-  const authVar = process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY";
+  const authVar = authEnvName(cfg);
+  if (!authVar) { log("improve:error", { error: `Kein API-Key für Agent "${cfg.agent}"` }); return; }
   await docker(["run", "-d", "--name", "sf-improve", "--label", "sf.improve=1",
     ...agentLimits(cfg),
-    "-e", `REPO=${cfg.factoryRepo}`, "-e", `MODEL=${cfg.model}`, "-e", "GH_TOKEN", "-e", authVar,
+    "-e", `REPO=${cfg.factoryRepo}`, "-e", `MODEL=${cfg.model}`, "-e", `AGENT=${cfg.agent}`, "-e", "GH_TOKEN", "-e", authVar,
     "-v", `${work}:/work`, "-v", `${runs}:/data/runs:ro`, "-v", `${metrics}:/data/metrics.jsonl:ro`,
     "--entrypoint", "/factory/improve.sh", cfg.image], { GH_TOKEN: ghToken });
   log("improve:started", { repo: cfg.factoryRepo });
@@ -778,11 +809,16 @@ async function tick(cfg: Config) {
 async function main() {
   const once = process.argv.includes("--once");
   let cfg = loadConfig();
-  if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-    log("config:error", { error: "Weder CLAUDE_CODE_OAUTH_TOKEN noch ANTHROPIC_API_KEY gesetzt" });
+  const authVar = authEnvName(cfg);
+  if (!authVar || !process.env[authVar]) {
+    log("config:error", {
+      error: cfg.agent === "claude"
+        ? "Weder CLAUDE_CODE_OAUTH_TOKEN noch ANTHROPIC_API_KEY gesetzt"
+        : `Kein API-Key gefunden (erwartet: ${cfg.apiKeyEnv ?? "OPENROUTER_API_KEY"}). Trage ihn in /etc/software-factory/secrets.env ein.`,
+    });
     process.exit(1);
   }
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.ANTHROPIC_API_KEY) {
+  if (cfg.agent === "claude" && process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.ANTHROPIC_API_KEY) {
     log("config:warning", { warning: "Beide Login-Arten gesetzt. Es wird nur CLAUDE_CODE_OAUTH_TOKEN an die Jobs gegeben." });
   }
   CONTAINER_UID = Number((await docker(["run", "--rm", "--entrypoint", "id", cfg.image, "-u"])).trim());
@@ -791,7 +827,7 @@ async function main() {
   log("runner:started", {
     login: FACTORY_LOGIN, allowedUsers: cfg.allowedUsers ?? [],
     preview: cfg.preview ? previewLink(cfg, 1).replace(/:4001$/, ":4001…") : "aus",
-    containerUid: CONTAINER_UID, repos: cfg.repos, maxParallel: cfg.maxParallel, model: cfg.model, workflow: cfg.workflow,
+    containerUid: CONTAINER_UID, repos: cfg.repos, maxParallel: cfg.maxParallel, agent: cfg.agent, model: cfg.model, workflow: cfg.workflow,
   });
   while (true) {
     try {

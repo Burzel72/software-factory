@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Startet einen Factory-Job: Repo holen, Branch auschecken, Claude Code mit Playbook laufen lassen.
-# Erwartet: REPO, ISSUE, BRANCH, MODEL, WORKFLOW, GH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN (oder ANTHROPIC_API_KEY)
-# und /work/prompt.md (vom Runner geschrieben).
+# Startet einen Factory-Job: Repo holen, Branch auschecken, Agent mit Playbook laufen lassen.
+# Erwartet: REPO, ISSUE, BRANCH, MODEL, WORKFLOW, GH_TOKEN, AGENT (opencode|claude),
+#           OPENROUTER_API_KEY (bzw. ANTHROPIC_API_KEY bei AGENT=claude) und /work/prompt.md.
 set -euo pipefail
 
 log() { echo "[factory] $*"; }
 
 : "${REPO:?}" "${ISSUE:?}" "${BRANCH:?}"
-MODEL="${MODEL:-opus}"
+MODEL="${MODEL:-openrouter/z-ai/glm-4.6}"
+export AGENT="${AGENT:-opencode}"
 export PHASE="${PHASE:-build}"   # check = prüfen, build = entwickeln, accept = unabhängige Abnahme
 WORKFLOW="${WORKFLOW:-starter-kit}"
 
-# Workflow-Skills als Nutzer-Skills bereitstellen (landen nicht im Ziel-Repo)
+# Workflow-Skills als Nutzer-Skills bereitstellen (landen nicht im Ziel-Repo).
+# ~/.claude/skills ist der Kompatibilitätspfad, den OpenCode ebenfalls liest.
 mkdir -p "$HOME/.claude/skills"
 if [ -d "/factory/workflows/$WORKFLOW/skills" ]; then
   cp -r "/factory/workflows/$WORKFLOW/skills/." "$HOME/.claude/skills/"
@@ -50,17 +52,13 @@ if [ "$PHASE" != "check" ] && [ -f .factory/setup.json ]; then
 fi
 
 export FACTORY_DEFAULT_BRANCH="$DEFAULT_BRANCH"
-log "Starte Claude Code ($MODEL, Phase: $PHASE, Workflow: $WORKFLOW) für $REPO#$ISSUE auf $BRANCH"
+# Skills des Workflows liegen zusätzlich unter /factory/workflows/<workflow> (nicht im Ziel-Repo)
+if [ -d "/factory/workflows/$WORKFLOW" ]; then export FACTORY_WORKFLOW_DIR="/factory/workflows/$WORKFLOW"; fi
+
+log "Starte Agent=$AGENT ($MODEL, Phase: $PHASE, Workflow: $WORKFLOW) für $REPO#$ISSUE auf $BRANCH"
 set +e
-claude -p "$(cat /work/prompt.md)" \
-  --append-system-prompt-file /factory/playbook.md \
-  --add-dir "/factory/workflows/$WORKFLOW" \
-  --model "$MODEL" \
-  --dangerously-skip-permissions \
-  --output-format stream-json --verbose \
-  > /work/claude.jsonl 2> /work/claude.err
+PROMPT_FILE=/work/prompt.md PLAYBOOK=/factory/playbook.md OUT=/work/result.json factory-agent
 CODE=$?
 set -e
-log "Claude Code beendet mit Exit-Code $CODE"
-tail -n 1 /work/claude.jsonl | jq -r '"Ergebnis: " + ((.result // "-") | tostring | .[0:500])' 2>/dev/null || true
+log "Lauf beendet mit Exit-Code $CODE"
 exit $CODE

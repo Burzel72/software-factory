@@ -3,8 +3,9 @@
     "DEIN-GITHUB-NAME/dein-repo"
   ],
   "label": "factory",
-  "maxParallel": 2,
-  "model": "opus",
+  "maxParallel": 1,
+  "agent": "opencode",
+  "model": "openrouter/z-ai/glm-4.6",
   "workflow": "starter-kit",
   "pollSeconds": 60,
   "jobTimeoutMinutes": 90,

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Führt genau einen Agenten-Lauf aus und schreibt ein normalisiertes Ergebnis nach $OUT.
+# Damit ist der Runner agent-unabhängig: er liest nur noch /work/result.json.
+#
+# Erwartet:  MODEL, PROMPT_FILE, PLAYBOOK
+# Optional:  AGENT=opencode|claude (Standard: opencode), OUT=/work/result.json
+set -uo pipefail
+
+AGENT="${AGENT:-opencode}"
+MODEL="${MODEL:?MODEL fehlt}"
+PROMPT_FILE="${PROMPT_FILE:?PROMPT_FILE fehlt}"
+PLAYBOOK="${PLAYBOOK:?PLAYBOOK fehlt}"
+WORK="${WORK:-/work}"
+OUT="${OUT:-$WORK/result.json}"
+JSONL="$WORK/agent.jsonl"
+ERR="$WORK/agent.err"
+
+log() { echo "[factory-agent] $*"; }
+
+# Playbook als System-Prompt des primären Agenten. Die Berechtigungen stehen in
+# ~/.config/opencode/opencode.json (im Image), nicht hier.
+prepare_opencode() {
+  mkdir -p "$HOME/.config/opencode/agents"
+  {
+    printf -- '---\n'
+    printf 'description: Software Factory — bearbeitet genau ein GitHub Issue unbeaufsichtigt\n'
+    printf 'mode: primary\n'
+    printf -- '---\n\n'
+    cat "$PLAYBOOK"
+  } > "$HOME/.config/opencode/agents/factory.md"
+}
+
+run_claude() {
+  claude -p "$(cat "$PROMPT_FILE")" \
+    --append-system-prompt-file "$PLAYBOOK" \
+    --model "$MODEL" \
+    --dangerously-skip-permissions \
+    --output-format stream-json --verbose \
+    > "$JSONL" 2> "$ERR"
+}
+
+run_opencode() {
+  prepare_opencode
+  opencode run "$(cat "$PROMPT_FILE")" \
+    --agent factory \
+    --model "$MODEL" \
+    --format json \
+    --auto \
+    > "$JSONL" 2> "$ERR"
+}
+
+# Millisekunden, wo die Shell sie kann (GNU date im Container), sonst Sekunden
+now_ms() { local t; t=$(date +%s%3N 2>/dev/null); case "$t" in ''|*[!0-9]*) echo $(( $(date +%s) * 1000 ));; *) echo "$t";; esac; }
+
+START=$(now_ms)
+log "Agent=$AGENT Modell=$MODEL"
+case "$AGENT" in
+  claude)   run_claude ;;
+  opencode) run_opencode ;;
+  *) echo "[factory-agent] Unbekannter AGENT '$AGENT' (erlaubt: claude, opencode)" >&2; exit 2 ;;
+esac
+CODE=$?
+DURATION_MS=$(( $(now_ms) - START ))
+log "beendet mit Exit-Code $CODE"
+tail -n 3 "$ERR" 2>/dev/null | sed 's/^/[factory-agent] err: /' || true
+
+# Ergebnis vereinheitlichen. Die Feldnamen bleiben die von Claude Code, damit der
+# Runner (und factory-stats) beide Agenten gleich auswerten kann.
+if [ "$AGENT" = "claude" ]; then
+  RESULT=$(tail -n 1 "$JSONL" 2>/dev/null | jq -c . 2>/dev/null || echo '{}')
+  jq -n --argjson r "$RESULT" --argjson code "$CODE" --argjson d "$DURATION_MS" '{
+    result: ($r.result // null),
+    is_error: (($r.is_error // false) or $code != 0),
+    num_turns: ($r.num_turns // null),
+    total_cost_usd: ($r.total_cost_usd // null),
+    duration_ms: ($r.duration_ms // $d),
+    agent: "claude"
+  }' > "$OUT" 2>/dev/null || echo "{\"result\":null,\"is_error\":true,\"agent\":\"claude\"}" > "$OUT"
+else
+  # OpenCode schreibt JSONL-Events (step_start, text, tool_use, step_finish, error).
+  # Unbekannte Zeilen (Warnungen) werden ignoriert: nur Objekte mit "type" zählen.
+  STATS=$(grep -a '^{' "$JSONL" 2>/dev/null | jq -s '
+    def evs(t): [ .[] | select(.type == t) ];
+    def texts: [ .[] | select(.type == "text") | .part.text // empty ];
+    def steps: [ .[] | select(.type == "step_finish") | .part ];
+    def errs:  [ .[] | select(.type == "error") | (.error.data.message // .error.name // "Fehler") ];
+    {
+      result: (texts | last // null),
+      num_turns: ([ .[] | select(.type == "step_start") ] | length),
+      total_cost_usd: ([steps[] | (.cost // 0)] | add),
+      tokens_in: ([steps[] | (.tokens.input // 0)] | add),
+      tokens_out: ([steps[] | (.tokens.output // 0)] | add),
+      error_message: (errs | last // null)
+    }' 2>/dev/null || echo '{}')
+  jq -n --argjson s "$STATS" --argjson code "$CODE" --argjson d "$DURATION_MS" '{
+    result: ($s.result // $s.error_message // null),
+    is_error: ($code != 0),
+    num_turns: ($s.num_turns // null),
+    total_cost_usd: ($s.total_cost_usd // null),
+    tokens_in: ($s.tokens_in // null),
+    tokens_out: ($s.tokens_out // null),
+    duration_ms: $d,
+    agent: "opencode"
+  }' > "$OUT" 2>/dev/null || echo "{\"result\":null,\"is_error\":true,\"agent\":\"opencode\"}" > "$OUT"
+fi
+
+jq -r '"Ergebnis: " + ((.result // "-") | tostring | .[0:500])' "$OUT" 2>/dev/null || true
+exit "$CODE"

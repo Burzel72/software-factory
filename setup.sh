@@ -47,7 +47,12 @@ install -d -m 700 "$CONF_DIR"
 install -d /var/lib/software-factory/jobs
 # Vorschau: Server-IP und zufälliges Passwort eintragen, falls noch "AUTO"
 if jq -e '.preview.host == "AUTO" or .preview.password == "AUTO"' "$CONF_DIR/config.json" >/dev/null 2>&1; then
-  IP=$(curl -fsS4 https://ifconfig.me || hostname -I | awk '{print $1}')
+  # Lokale IP bevorzugen (Factory im LAN), sonst die öffentliche (VPS)
+  IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+  case "$IP" in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;;
+    *) IP=$(curl -fsS4 https://ifconfig.me || echo "$IP") ;;
+  esac
   PW=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-16)
   TMP=$(mktemp)
   jq --arg ip "$IP" --arg pw "$PW" '.preview.host = (if .preview.host == "AUTO" then $ip else .preview.host end) | .preview.password = (if .preview.password == "AUTO" then $pw else .preview.password end)' "$CONF_DIR/config.json" > "$TMP" && mv "$TMP" "$CONF_DIR/config.json" && chmod 600 "$CONF_DIR/config.json"
@@ -57,7 +62,10 @@ fi
 docker pull -q caddy:2-alpine >/dev/null
 
 say "Job-Image bauen (dauert beim ersten Mal ein paar Minuten)"
-docker build -q -t software-factory-job:latest -f image/Dockerfile . >/dev/null
+AGENT=$(jq -r '.agent // "opencode"' "$CONF_DIR/config.json")
+WITH_CLAUDE=0; [ "$AGENT" = "claude" ] && WITH_CLAUDE=1
+echo "  Agent: $AGENT"
+docker build -q --build-arg WITH_CLAUDE="$WITH_CLAUDE" -t software-factory-job:latest -f image/Dockerfile . >/dev/null
 echo "  ✓ software-factory-job:latest"
 
 say "Befehl factory-stats einrichten"
@@ -79,7 +87,11 @@ systemctl enable software-factory >/dev/null 2>&1
 
 # Was fehlt noch?
 MISSING=()
-grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' "$CONF_DIR/secrets.env" || MISSING+=("Claude-Login: Token in $CONF_DIR/secrets.env (siehe Anleitung)")
+if [ "$AGENT" = "claude" ]; then
+  grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY)=.' "$CONF_DIR/secrets.env" || MISSING+=("Claude-Login: Token in $CONF_DIR/secrets.env (siehe Anleitung)")
+else
+  grep -qE '^(OPENROUTER_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GEMINI_API_KEY|ZAI_API_KEY)=.' "$CONF_DIR/secrets.env" || MISSING+=("API-Key des Agenten in $CONF_DIR/secrets.env (z. B. OPENROUTER_API_KEY, siehe docs/opencode-openrouter.md)")
+fi
 gh auth status >/dev/null 2>&1 || MISSING+=("GitHub-Login: gh auth login -s project")
 jq -e '.repos | map(select(. != "DEIN-GITHUB-NAME/dein-repo")) | length > 0' "$CONF_DIR/config.json" >/dev/null || MISSING+=("Repo anbinden: ./scripts/add-repo.sh besitzer/repo")
 

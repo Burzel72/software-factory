@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "update": "disable",
+  "permissions": [
+    { "action": "*", "resource": "*", "effect": "allow" },
+
+    { "action": "question", "resource": "*", "effect": "deny" },
+
+    { "action": "shell", "resource": "gh pr merge*", "effect": "deny" },
+    { "action": "shell", "resource": "gh pr close*", "effect": "deny" },
+    { "action": "shell", "resource": "gh repo delete*", "effect": "deny" },
+    { "action": "shell", "resource": "gh release *", "effect": "deny" },
+    { "action": "shell", "resource": "git push* main*", "effect": "deny" },
+    { "action": "shell", "resource": "git push* HEAD:main*", "effect": "deny" },
+    { "action": "shell", "resource": "git push* --force*", "effect": "deny" },
+    { "action": "shell", "resource": "git reset* --hard origin/main*", "effect": "deny" },
+    { "action": "shell", "resource": "sudo*", "effect": "deny" },
+    { "action": "shell", "resource": "ssh*", "effect": "deny" },
+    { "action": "shell", "resource": "docker*", "effect": "deny" },
+    { "action": "shell", "resource": "systemctl*", "effect": "deny" },
+
+    { "action": "read", "resource": "*secrets*", "effect": "deny" },
+    { "action": "read", "resource": "*.env", "effect": "deny" },
+    { "action": "edit", "resource": "*secrets*", "effect": "deny" }
+  ]
+}

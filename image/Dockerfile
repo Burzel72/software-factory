@@ -1,6 +1,8 @@
 # Job-Image: Jeder Factory-Job läuft in einem eigenen Container aus diesem Image.
-# Enthält Claude Code, GitHub CLI, git, Node und einen Chromium für Screenshots/E2E-Tests.
+# Enthält OpenCode (Standard) oder Claude Code (optional, WITH_CLAUDE=1), GitHub CLI,
+# git, Node und einen Chromium für Screenshots/E2E-Tests.
 FROM mcr.microsoft.com/playwright:v1.65.0-noble
+ARG WITH_CLAUDE=0
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq \
@@ -26,10 +28,17 @@ COPY playbooks/improve.md /factory/improve.md
 COPY workflows/ /factory/workflows/
 RUN chmod +x /usr/local/bin/factory-* /factory/entrypoint.sh /factory/preview.sh /factory/improve.sh
 
-# Claude Code als normaler Nutzer installieren (offizieller Installer)
+# Agent als normaler Nutzer installieren (offizielle Installer)
 USER pwuser
 ENV HOME=/home/pwuser
-RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# OpenCode (MIT) – Standard-Agent. Modelle kommen über OpenRouter o. ä., siehe docs/opencode-openrouter.md
+RUN curl -fsSL https://opencode.ai/install | bash
+COPY --chown=pwuser:root image/opencode.json /home/pwuser/.config/opencode/opencode.json
+
+# Claude Code nur, wenn ausdrücklich verlangt (Rückfallweg)
+RUN if [ "$WITH_CLAUDE" = "1" ]; then curl -fsSL https://claude.ai/install.sh | bash; fi
+ENV PATH=/home/pwuser/.opencode/bin:$PATH
 # Python-Projekte: uv (verwaltet Python-Versionen und Pakete selbst)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH=/home/pwuser/.local/bin:$PATH

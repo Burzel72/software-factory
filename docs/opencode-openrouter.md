@@ -36,6 +36,36 @@ Der Unterschied steckt in fünf Dateien:
 - `apiKeyEnv` (optional): Name der Umgebungsvariable mit dem Key, falls er nicht
   `OPENROUTER_API_KEY` heißt.
 
+### Modell je Projekt und Phase
+
+Ein Eintrag in `repos` darf statt eines Strings ein Objekt sein — dann hat dieses Projekt ein
+eigenes Modell, einen eigenen Zugang und optional je Phase ein anderes Modell:
+
+```json
+{
+  "repos": [
+    "Burzel72/familie-zaehler",
+    {
+      "repo": "pip/uwl-backend",
+      "model": "openrouter/anthropic/claude-sonnet-4.5",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "phaseModels": {
+        "check":  "openrouter/qwen/qwen3-coder",
+        "build":  "openrouter/anthropic/claude-sonnet-4.5",
+        "accept": "openrouter/z-ai/glm-4.6"
+      }
+    }
+  ]
+}
+```
+
+Reihenfolge der Auflösung: **Phase → Projekt → global**. Fehlt etwas, greift die nächste
+Stufe; ein reiner String bleibt gültig und nutzt den globalen Standard. Der Runner gibt pro
+Lauf genau einen Key weiter — den des Projekts.
+
+Sinn der Aufteilung: Prüfen und Abnehmen brauchen Urteilskraft, Bauen braucht Code-Erfahrung.
+Ein starkes Modell nur in der Bauphase spart Geld, ohne die Abnahme zu schwächen.
+
 ## 2. Key hinterlegen
 
 ```bash

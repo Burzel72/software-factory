@@ -10,8 +10,19 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+/** Ein Projekt: Kurzform als String, oder als Objekt mit eigenem Modell und Zugang. */
+export type RepoConfig = {
+  repo: string;
+  /** Modell nur für dieses Projekt. Ohne Angabe gilt `model` aus der Config. */
+  model?: string;
+  /** Modell je Phase; überschreibt das Modell des Projekts. */
+  phaseModels?: Partial<Record<Phase, string>>;
+  /** Umgebungsvariable mit dem API-Key für dieses Projekt. */
+  apiKeyEnv?: string;
+};
+
 export type Config = {
-  repos: string[];
+  repos: (string | RepoConfig)[];
   label: string;
   /** Wie viele Agent-Läufe gleichzeitig, über alle Phasen und Repos (Prüfung, Bau, Abnahme, Verbesserung) */
   maxParallel: number;
@@ -88,11 +99,28 @@ export function loadConfig(path = CONFIG_PATH): Config {
   return cfg;
 }
 
+/** Vereinheitlicht `repos`: die Kurzform wird zum Objekt, damit der Rest nur eine Form kennt. */
+export function repoList(cfg: Config): RepoConfig[] {
+  return cfg.repos.map((r) => (typeof r === "string" ? { repo: r } : r));
+}
+
+/**
+ * Modell und Zugang für genau ein Projekt und eine Phase. Reihenfolge:
+ * Phase-Modell → Projekt-Modell → globales Modell. Ein Projekt kann einen eigenen
+ * Key mitbringen (z. B. Firmen-Copilot neben privatem OpenRouter).
+ */
+export function repoJob(cfg: Config, repo: string, phase?: Phase): { model: string; apiKeyEnv?: string } {
+  const entry = repoList(cfg).find((r) => r.repo === repo) ?? { repo };
+  const model = (phase && entry.phaseModels?.[phase]) || entry.model || cfg.model;
+  return { model, apiKeyEnv: entry.apiKeyEnv ?? cfg.apiKeyEnv };
+}
+
 /**
  * Welche Umgebungsvariable trägt den Modell-Zugang? Der Runner gibt genau diese an den
  * Job-Container weiter, damit kein anderer Key im Container landet.
  */
-function authEnvName(cfg: Config): string | null {
+function authEnvName(cfg: Config, override?: string): string | null {
+  if (override) return override;
   if (cfg.apiKeyEnv) return cfg.apiKeyEnv;
   if (cfg.agent === "claude") return process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY";
   const candidates = ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "ZAI_API_KEY"];
@@ -390,7 +418,8 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
   await syncBoard(cfg, issue.url, status);
 
   const ghToken = (await gh(["auth", "token"])).trim();
-  const authVar = authEnvName(cfg);
+  const job = repoJob(cfg, repo, phase);
+  const authVar = authEnvName(cfg, job.apiKeyEnv);
   if (!authVar) throw new Error(`Kein API-Key für Agent "${cfg.agent}" in der Umgebung (siehe secrets.env)`);
   await docker(["rm", "-f", name]).catch(() => {});
   await docker([
@@ -398,7 +427,7 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
     "--label", "software-factory=1", "--label", `sf.repo=${repo}`, "--label", `sf.issue=${issue.number}`, "--label", `sf.phase=${phase}`, "--label", `sf.mode=${mode}`,
     ...agentLimits(cfg),
     "-e", `REPO=${repo}`, "-e", `ISSUE=${issue.number}`, "-e", `BRANCH=factory/${issue.number}`,
-    "-e", `MODEL=${cfg.model}`, "-e", `AGENT=${cfg.agent}`, "-e", `WORKFLOW=${cfg.workflow}`, "-e", `PHASE=${phase}`,
+    "-e", `MODEL=${job.model}`, "-e", `AGENT=${cfg.agent}`, "-e", `WORKFLOW=${cfg.workflow}`, "-e", `PHASE=${phase}`,
     "-e", "GH_TOKEN", "-e", authVar, // Werte kommen aus der Umgebung, nicht aus der Kommandozeile
     "-v", `${dir}:/work`, ...scenarioMount,
     await imageFor(cfg, repo),
@@ -477,7 +506,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
   appendFileSync(join(cfg.dataDir, "metrics.jsonl"), JSON.stringify({
     t: new Date().toISOString(), repo: c.repo, issue: c.issue, phase: c.phase, mode: c.mode,
     status: metricStatus, exitCode: c.exitCode, seconds: Number.isFinite(seconds) ? seconds : null,
-    turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null, model: cfg.model,
+    turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null, model: repoJob(cfg, c.repo, c.phase).model,
   }) + "\n");
 
   if (ended) {
@@ -798,7 +827,7 @@ async function tick(cfg: Config) {
   const slots = { free: cfg.maxParallel - containers.length - (improving ? 1 : 0) };
 
   // Ein fehlerhaftes Repo darf die anderen nicht blockieren
-  for (const repo of cfg.repos) {
+  for (const { repo } of repoList(cfg)) {
     try { await tickRepo(cfg, repo, containers, slots); }
     catch (e) { log("repo:error", { repo, error: String(e) }); }
   }
@@ -827,7 +856,7 @@ async function main() {
   log("runner:started", {
     login: FACTORY_LOGIN, allowedUsers: cfg.allowedUsers ?? [],
     preview: cfg.preview ? previewLink(cfg, 1).replace(/:4001$/, ":4001…") : "aus",
-    containerUid: CONTAINER_UID, repos: cfg.repos, maxParallel: cfg.maxParallel, agent: cfg.agent, model: cfg.model, workflow: cfg.workflow,
+    containerUid: CONTAINER_UID, repos: repoList(cfg).map((r) => r.repo), maxParallel: cfg.maxParallel, agent: cfg.agent, model: cfg.model, workflow: cfg.workflow,
   });
   while (true) {
     try {

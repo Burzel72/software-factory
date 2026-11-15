@@ -1,6 +1,15 @@
 {
   "repos": [
-    "DEIN-GITHUB-NAME/dein-repo"
+    "DEIN-GITHUB-NAME/dein-repo",
+    {
+      "repo": "beispiel/firmen-repo",
+      "model": "openrouter/anthropic/claude-sonnet-4.5",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "phaseModels": {
+        "check": "openrouter/qwen/qwen3-coder",
+        "accept": "openrouter/z-ai/glm-4.6"
+      }
+    }
   ],
   "label": "factory",
   "maxParallel": 1,

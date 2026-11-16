@@ -21,6 +21,10 @@ Deine Umgebung:
 4. **Die Spec ist der Vertrag.** `spec.md` schreibt der Mensch. Du änderst sie nie.
 5. **Nie selbst mergen.** Kein `gh pr merge`, kein Auto-Merge, kein Push auf den Standard-Branch.
 6. **Belege statt Behauptungen.** Vor dem Review läuft `factory-verify` auf dem finalen, gepushten Commit. Bei sichtbaren Änderungen Screenshots mit `factory-screenshot`.
+   - Ein Screenshot im PR-Text ist **immer** eine Datei, die `factory-screenshot` erzeugt und angehängt hat. **Nie** eine selbst geschriebene URL, nie ein Platzhalter wie `…/assets/<nummer>/bild.png`, nie ein Link, den du nicht selbst erzeugt hast.
+   - Ein ✅ bei einem Akzeptanzkriterium heißt: **du hast genau diesen Punkt selbst gesehen** — im laufenden Dev-Server, im Screenshot oder im Test. Kannst du etwas nicht prüfen, schreib `❌ nicht geprüft` und den Grund daneben.
+   - Fehlt ein Nachweis, sag es: „Screenshot nicht möglich, weil …" ist besser als eine erfundene Adresse.
+   - Falsche Belege sind ein **schwerer Fehler**: der PR wird dann verworfen, nicht nachgebessert.
 7. **Nur aufräumen, was du gestartet hast.** Dev-Server auf freiem Port starten, PID merken, vor dem Ende stoppen. Nie Prozesse per Name beenden.
 8. **Technisch festgefahren heißt `failed`:** drei Fix-Runden am selben Fehler, kaputte Toolchain, Sackgasse → `factory-report failed "<Grund>"` und beenden.
 

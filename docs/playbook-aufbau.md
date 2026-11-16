@@ -278,7 +278,65 @@ OpenRouter-Seite pro Key, getrennt vom Hermes-Key.
 
 ---
 
-## 7. Sicherheit — was nach dem Aufbau zu tun bleibt
+## 7. AppServer: wohin released wird
+
+Zweite VM, auf der Projekte **produktiv** laufen — getrennt von der Fabrik.
+
+| Feld | Wert |
+|---|---|
+| VMID / Name | `400` / `AppServer` |
+| CPU / RAM / Platte | 2 vCPU / 4096 MB / 40 GB auf `local-lvm` |
+| Netz | `vmbr0`, `192.168.0.86/24`, GW + DNS `192.168.0.1` |
+| Benutzer | `factory` (Schlüssel, sudo), wie auf der Fabrik-VM |
+| Inhalt | Docker 29.10, Compose 5.7.1, Release-Befehl |
+
+Aufbau identisch zu VM 300 (gleiches Cloud-Image, gleiche cloud-init-Werte). Danach:
+
+```bash
+apt-get install -y ca-certificates curl jq git rsync
+# Docker nach offizieller Anleitung (docker-ce, buildx, compose-plugin)
+install -m 0755 /tmp/release /usr/local/bin/release
+mkdir -p /srv/apps /var/log/release
+```
+
+### 7.1 Aufbau je Projekt
+
+```
+/srv/apps/<projekt>/
+  compose.yml     wie gebaut und gestartet wird (restart: unless-stopped)
+  release.conf    REPO=…  BRANCH=main  PORT=8080  HEALTH=/health
+  src/            ausgecheckter Code (maschinell)
+  data/           dauerhafte Daten als Volume — überlebt jeden Release
+```
+
+### 7.2 Release-Ablauf
+
+```bash
+release <projekt>             # git pull, build, up, Health-Prüfung (30 s)
+release <projekt> --status    # Container und Health
+release --list                # alle Projekte mit Port
+```
+
+Der Befehl bricht ab, wenn der Health-Pfad nach 30 Sekunden nicht antwortet, und zeigt dann die
+letzten 30 Logzeilen der Anwendung. **Kein automatisches Durchreichen**: nach dem Merge in
+`main` löst der Mensch den Release aus.
+
+### 7.3 Ports statt Namen (Namen später)
+
+Jedes Projekt bekommt einen festen Port: `http://192.168.0.86:<PORT>`. Namen wie
+`ferienhaussuche.lan` kommen dazu, sobald ein Eintrag im Router oder eine hosts-Zeile pro Gerät
+existiert — die Ports bleiben dann als Rückfallweg bestehen.
+
+### 7.4 Verifiziert am 16.11.2026
+
+Wegwerf-Projekt `hello` (python:3.12-alpine, Port 8080): `release hello` meldete
+`bereit nach 2s (HTTP 200)`, Status und Liste korrekt, Zugriff vom Mac
+`http://192.168.0.86:8080 → 200`. Danach vollständig entfernt (Container, Netz, Ordner, Log),
+Port wieder geschlossen. Die Mechanik ist damit belegt, nicht nur beschrieben.
+
+---
+
+## 8. Sicherheit — was nach dem Aufbau zu tun bleibt
 
 1. **Proxmox-Token erneuern.** Das Secret wurde beim Aufbau im Chat übertragen und steht damit
    im Verlauf. Nach dem Aufbau löschen und neu anlegen; die ACL-Zeilen bleiben gültig, weil sie
@@ -292,7 +350,7 @@ OpenRouter-Seite pro Key, getrennt vom Hermes-Key.
 
 ---
 
-## 8. Abweichungen von der Original-Anleitung
+## 9. Abweichungen von der Original-Anleitung
 
 | Original (Hostinger-VPS) | Hier |
 |---|---|

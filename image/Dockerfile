@@ -32,8 +32,10 @@ RUN chmod +x /usr/local/bin/factory-* /factory/entrypoint.sh /factory/preview.sh
 USER pwuser
 ENV HOME=/home/pwuser
 
-# OpenCode (MIT) – Standard-Agent. Modelle kommen über OpenRouter o. ä., siehe docs/opencode-openrouter.md
-RUN curl -fsSL https://opencode.ai/install | bash
+# OpenCode 2 (MIT) – Standard-Agent. Modelle kommen über OpenRouter o. ä., siehe docs/opencode-openrouter.md
+# Wichtig: /v2/install — der Pfad /install liefert Version 1, die unsere permissions-Form nicht kennt.
+RUN curl -fsSL https://opencode.ai/v2/install | bash \
+ && ( ~/.opencode/bin/opencode --version || ~/.opencode/bin/opencode2 --version ) | sed 's/^/[opencode] /'
 COPY --chown=pwuser:root image/opencode.json /home/pwuser/.config/opencode/opencode.json
 
 # Claude Code nur, wenn ausdrücklich verlangt (Rückfallweg)

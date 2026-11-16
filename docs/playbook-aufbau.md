@@ -336,6 +336,50 @@ Port wieder geschlossen. Die Mechanik ist damit belegt, nicht nur beschrieben.
 
 ---
 
+### 7.5 Erstes Projekt: Ferienhaussuche
+
+Repo `Burzel72/ferienhaussuche` (privat), übernommen aus `~/.hermes/scripts/schweden`
+(Original auf dem Mac unverändert). Einzige Codeänderung: Datenpfad über `SCHWEDEN_DATA`
+steuerbar, weil der Container seine Daten als Volume bekommt.
+
+```bash
+# auf dem AppServer
+sudo mkdir -p /srv/apps/ferienhaussuche/data
+sudo cp compose.yml release.conf /srv/apps/ferienhaussuche/   # aus deploy/ des Repos
+rsync -a ~/.hermes/data/schweden/ <ziel>:/srv/apps/ferienhaussuche/data/   # vom Mac
+sudo release ferienhaussuche
+```
+
+Ergebnis (geprüft): `/health` → `{"ok": true}`, Startseite HTTP 200 nach 2 s, `/api/data`
+liefert **38 Objekte und 3 Favoriten** — identisch zur Mac-Instanz. Zugriff:
+`http://192.168.0.86:8080`.
+
+**Privates Repo braucht einen Lesezugang auf dem Server.** Zwei Fallen, die je einen Anlauf
+kosten:
+
+```bash
+# 1. Deploy-Key (nur Lesen) anlegen und bei GitHub eintragen
+sudo ssh-keygen -t ed25519 -N "" -f /root/.ssh/<projekt> -C "appserver@<projekt>"
+gh api repos/<owner>/<repo>/keys -X POST -f title="AppServer" \
+  -f key="$(sudo cat /root/.ssh/<projekt>.pub)" -F read_only=true
+
+# 2. git muss diesen Schlüssel nehmen UND den Host kennen
+cat > /root/.ssh/config <<EOF
+Host github.com
+  User git
+  IdentityFile /root/.ssh/<projekt>
+  IdentitiesOnly yes
+EOF
+ssh-keyscan -T 5 github.com >> /root/.ssh/known_hosts    # als root, direkt schreiben
+```
+
+Ohne `IdentityFile` greift git den Standard-Schlüssel (der hier nicht existiert) und meldet
+`Permission denied`; ohne `known_hosts` bricht es mit `Host key verification failed` ab.
+`ssh-keyscan ... | sudo tee` hat auf diesem Host eine leere Datei hinterlassen — `sudo bash -c`
+mit `>>` schreibt zuverlässig.
+
+---
+
 ## 8. Sicherheit — was nach dem Aufbau zu tun bleibt
 
 1. **Proxmox-Token erneuern.** Das Secret wurde beim Aufbau im Chat übertragen und steht damit

@@ -378,6 +378,39 @@ Ohne `IdentityFile` greift git den Standard-Schlüssel (der hier nicht existiert
 `ssh-keyscan ... | sudo tee` hat auf diesem Host eine leere Datei hinterlassen — `sudo bash -c`
 mit `>>` schreibt zuverlässig.
 
+### 7.6 Datenfluss und Fabrik-Bindung
+
+```
+Mac (Quelle)                     AppServer (Anzeige)
+~/.hermes/data/schweden/  --rsync-->  /srv/apps/ferienhaussuche/data
+   ^                                        |
+   |                                        v
+täglicher Hermes-Job 07:30           Container :8080  → Familie (iPad)
+   + stündlicher Push-Cronjob (ohne Modell, schweigt bei Erfolg)
+```
+
+Der Mac bleibt die Quelle der Wahrheit; der AppServer liest nur. Wer `houses.json` ändert,
+ruft `push_to_appserver.sh` auf, sonst wartet die Familie bis zur nächsten vollen Stunde.
+
+Fabrik-Bindung (Vorbereitung, noch ohne Auftrag):
+
+```bash
+sudo ./scripts/add-repo.sh Burzel72/ferienhaussuche
+```
+
+Legt elf Labels an, trägt das Repo in `config.json` ein und verknüpft das Board. Für das Board
+braucht der GitHub-Token den Scope **`project`** — ohne ihn bricht `add-repo.sh` mitten drin ab
+(„missing required scopes [project read:project]"). Nachziehen:
+
+```bash
+gh auth refresh -s project,read:project     # auf dem Mac, interaktiv
+gh auth token | ssh … 'sudo gh auth login --with-token -h github.com'   # in die VM
+```
+
+Ergebnis: Board „Software Factory" mit zehn Spalten (Neu … Fehlgeschlagen), verknüpft als
+`project: {owner, number}` in der Config. Der Runner meldet die Spalten im Log
+(`event: board:columns`) — das ist der Beweis, dass die Anbindung greift.
+
 ---
 
 ## 8. Sicherheit — was nach dem Aufbau zu tun bleibt

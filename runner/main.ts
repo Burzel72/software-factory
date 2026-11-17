@@ -861,13 +861,17 @@ async function reconcileClosed(cfg: Config) {
     }
     for (const it of closed) {
       const stale = (it.labels ?? []).filter((l) => l.name.startsWith(`${cfg.label}:`) && l.name !== `${cfg.label}:done`);
-      if (stale.length === 0) continue;
       try {
-        const args = ["issue", "edit", String(it.number), "-R", r, "--add-label", `${cfg.label}:done`];
-        for (const l of stale) args.push("--remove-label", l.name);
-        await gh(args);
+        if (stale.length > 0) {
+          const args = ["issue", "edit", String(it.number), "-R", r, "--add-label", `${cfg.label}:done`];
+          for (const l of stale) args.push("--remove-label", l.name);
+          await gh(args);
+          log("issue:reconciled", { repo: r, issue: it.number, removed: stale.map((l) => l.name) });
+        }
+        // Spalte immer mitziehen: Wird die Status-Auswahl am Board neu angelegt, vergibt
+        // GitHub neue Option-IDs und bestehende Werte gehen verloren. Ein geschlossener
+        // Auftrag gehört nach "Fertig" — auch wenn das Label schon stimmt.
         await syncBoard(cfg, it.url, "done");
-        log("issue:reconciled", { repo: r, issue: it.number, removed: stale.map((l) => l.name) });
       } catch (e) {
         log("reconcile:error", { repo: r, issue: it.number, error: String(e) });
       }

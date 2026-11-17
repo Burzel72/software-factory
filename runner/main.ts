@@ -488,12 +488,31 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     accept: ["review", "working", "question", "failed"], // working = Rückgabe an die Entwicklung
   };
   let problem = reason ?? null;
-  if (!problem && !(status.status && endStates[c.phase].includes(status.status))) problem = "Der Lauf hat kein Ergebnis gemeldet.";
+  let buildOk = false;
+  if (!problem && !(status.status && endStates[c.phase].includes(status.status))) {
+    // Der Agent hat am Ende nicht gemeldet. Das allein heißt noch nichts: Gute Arbeit darf nicht
+    // weggeworfen werden, nur weil der letzte Aufruf fehlt. Maßstab ist derselbe wie bei einer
+    // Meldung — Pflicht-Checks auf genau dem gepushten Stand, `main` enthalten, Spec unberührt.
+    if (c.phase === "build" && c.exitCode === 0 && !result.is_error) {
+      const pr = status.pr ?? (await findPr(c.repo, c.issue, "open"))?.url;
+      const befund = await checkBuild(c.repo, c.issue, dir, pr);
+      if (befund) {
+        problem = `Der Lauf hat kein Ergebnis gemeldet, und die Arbeit ist nicht abgeschlossen: ${befund}`;
+      } else {
+        log("job:unreported", { repo: c.repo, issue: c.issue, phase: c.phase, uebernommen: "Arbeit geprüft, Ergebnis übernommen" });
+        status.status = "accepting";
+        status.pr = pr;
+        buildOk = true;
+      }
+    } else {
+      problem = "Der Lauf hat kein Ergebnis gemeldet.";
+    }
+  }
   if (!problem && (c.exitCode !== 0 || result.is_error)) {
     const was = cfg.agent === "claude" ? "Claude Code" : "OpenCode";
     problem = `${was} wurde mit einem Fehler beendet (Exit-Code ${c.exitCode}).`;
   }
-  if (!problem && c.phase === "build" && status.status === "accepting") problem = await checkBuild(c.repo, c.issue, dir, status.pr);
+  if (!problem && !buildOk && c.phase === "build" && status.status === "accepting") problem = await checkBuild(c.repo, c.issue, dir, status.pr);
   const ended = !problem;
   const metricStatus = ended ? (status.status === "review" && status.unresolved ? "unresolved" : status.status) : "failed";
 

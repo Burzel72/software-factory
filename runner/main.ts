@@ -968,6 +968,11 @@ async function main() {
       }
     }
   }
+  if (!(cfg.allowedUsers ?? []).length) {
+    log("config:warning", {
+      warning: "allowedUsers ist leer — Kommentare von Menschen werden ignoriert. Fragen, Rückgaben aus der Abnahme und 'nochmal versuchen' bleiben wirkungslos. Trage in der Konfiguration die GitHub-Namen ein, die mitreden dürfen (z. B. \"Burzel72\").",
+    });
+  }
   await initBoard(cfg);
   log("runner:started", {
     login: FACTORY_LOGIN, allowedUsers: cfg.allowedUsers ?? [],

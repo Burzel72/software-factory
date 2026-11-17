@@ -712,6 +712,26 @@ async function lostJob(cfg: Config, repo: string, issue: Issue): Promise<boolean
   return false;
 }
 
+/** Offene Blocker eines Auftrags (GitHub-native „blocked by"). Cache gilt pro Durchlauf. */
+const blockerCache = new Map<string, number[]>();
+export async function openBlockers(repo: string, issue: number): Promise<number[]> {
+  const key = `${repo}#${issue}`;
+  const cached = blockerCache.get(key);
+  if (cached) return cached;
+  const [owner, name] = repo.split("/");
+  const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){blockedBy(first:20){nodes{number state}}}}}";
+  try {
+    const out = await gh(["api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${issue}`]);
+    const nodes = (JSON.parse(out)?.data?.repository?.issue?.blockedBy?.nodes ?? []) as { number: number; state: string }[];
+    const open = nodes.filter((n) => n.state !== "CLOSED").map((n) => n.number);
+    blockerCache.set(key, open);
+    return open;
+  } catch (e) {
+    log("blockers:error", { repo, issue, error: String(e) });
+    return [];                                  // API-Fehler darf keinen Lauf blockieren
+  }
+}
+
 async function tickRepo(cfg: Config, repo: string, containers: Container[], slots: { free: number }) {
   const issues: Issue[] = JSON.parse(await gh(["issue", "list", "-R", repo, "--label", cfg.label, "--state", "open",
     "--json", "number,title,body,url,labels,comments", "--limit", "100"]));
@@ -785,6 +805,15 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
       if (prUrl) { phase = "build"; mode = "change-request"; }
     }
     if (!phase) continue;
+
+    // Abhängigkeit: Ein Auftrag, der auf einem offenen Issue steht, wird nicht bearbeitet.
+    // Quelle ist die GitHub-Verknüpfung "blocked by" am Issue — nicht der Text im Auftrag.
+    const waiting = await openBlockers(repo, issue.number);
+    if (waiting.length) {
+      log("issue:blocked", { repo, issue: issue.number, blockedBy: waiting });
+      continue;
+    }
+
     // Ein gemeinsamer Platz-Pool für alle Phasen. Ohne freien Platz bleibt das Issue in seinem Status und kommt beim nächsten Durchlauf dran.
     if (slots.free <= 0) continue;
     if (lost && !(await lostJob(cfg, repo, issue))) continue;
@@ -806,6 +835,7 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
 
 async function tick(cfg: Config) {
   let containers = await listContainers();
+  blockerCache.clear();                 // Abhängigkeiten jeden Durchlauf frisch lesen
 
   // 1. Beendete Container auswerten, zu lange laufende stoppen und als Fehlschlag erfassen
   for (const c of containers) {

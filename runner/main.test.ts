@@ -145,17 +145,13 @@ test("factory-verify: grün nur, wenn alle Checks bestehen", () => {
 
 // ---------- Auswertung eines beendeten Laufs (GitHub und Docker simuliert) ----------
 
-import { finish } from "./main.ts";
+import { finish, setSpawn } from "./main.ts";
 
 type Call = { cmd: string[]; stdin: string };
 const calls: Call[] = [];
 let headSha = "abc1234";
-// bun 1.4 macht globalThis.Bun schreibgeschützt ("Attempted to assign to readonly property").
-// Deshalb nicht das Objekt ersetzen, sondern nur spawn austauschen.
-Object.defineProperty(globalThis.Bun, "spawn", {
-  configurable: true,
-  writable: true,
-  value(cmd: string[], opts: any) {
+// Prozessstart wird über setSpawn ersetzt: bun 1.4 macht globalThis.Bun unveränderbar.
+setSpawn(((cmd: string[], opts: any) => {
     const call: Call = { cmd, stdin: "" };
     calls.push(call);
     let out = "";
@@ -166,8 +162,7 @@ Object.defineProperty(globalThis.Bun, "spawn", {
       stdout: new Blob([out]).stream(), stderr: new Blob([""]).stream(), kill() {},
       exited: (async () => { if (opts.stdin instanceof Blob) call.stdin = await opts.stdin.text(); return 0; })(),
     };
-  },
-});
+}) as any);
 
 async function finishRun(phase: "check" | "build" | "accept", files: Record<string, string>, exitCode = 0, reason?: string) {
   const config = cfg();

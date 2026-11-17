@@ -129,8 +129,14 @@ function authEnvName(cfg: Config, override?: string): string | null {
   return candidates.find((k) => !!process.env[k]) ?? null;
 }
 
+// Startet einen Prozess. Austauschbar, damit Tests die Außenwelt simulieren können —
+// bun 1.4 lässt globalThis.Bun nicht mehr überschreiben.
+type SpawnFn = typeof Bun.spawn;
+let spawnProcess: SpawnFn = ((cmd: string[], o: unknown) => Bun.spawn(cmd as string[], o as never)) as SpawnFn;
+export const setSpawn = (fn: SpawnFn) => { spawnProcess = fn; };
+
 async function run(cmd: string[], opts: { input?: string; env?: Record<string, string>; timeoutMs?: number } = {}): Promise<string> {
-  const proc = Bun.spawn(cmd, {
+  const proc = spawnProcess(cmd, {
     stdin: opts.input !== undefined ? new Blob([opts.input]) : "ignore",
     stdout: "pipe", stderr: "pipe",
     env: { ...process.env, ...opts.env },

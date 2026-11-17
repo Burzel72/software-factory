@@ -28,6 +28,7 @@ TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(secret TELEGRAM_BOT_TOKEN)}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-$(secret TELEGRAM_CHAT_ID)}"
 HA_URL="${HA_URL:-$(secret HA_URL)}"
 HA_TOKEN="${HA_TOKEN:-$(secret HA_TOKEN)}"
+HA_NOTIFY="${HA_NOTIFY:-$(secret HA_NOTIFY)}"
 export TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID HA_URL HA_TOKEN
 # Im systemd-Dienst ist HOME oft leer; gh sucht seine Zugangsdaten dort.
 export HOME="${HOME:-/root}"
@@ -157,7 +158,12 @@ send_telegram() {
 # Meldung über ein HA-Skript an alle Geräte (Wandtablets + Handy).
 # Das Skript heißt standardmäßig script.factory_wache; die Ziele stehen dort,
 # damit man sie in Home Assistant ändern kann, ohne hier etwas anzufassen.
+# Abschaltbar über HA_NOTIFY=0 in secrets.env: Das Board und Telegram reichen,
+# Home Assistant muss nicht zusätzlich klingeln. Die Statuswerte am Dashboard
+# (write_ha_status) bleiben davon unberührt — dort steht nur der Zustand, es
+# kommt keine Meldung.
 send_ha() {
+  [ "${HA_NOTIFY:-1}" = "0" ] && return 1
   [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ] && return 1
   curl -sf -m 15 -X POST "$HA_URL/api/services/script/factory_wache" \
     -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
@@ -173,7 +179,9 @@ send_github() {
 
 STATUS=""
 send_telegram "🛠 Software Factory"$'\n'"$BODY" && STATUS+="telegram=ok " || STATUS+="telegram=- "
-send_ha "$BODY" && STATUS+="ha=ok " || STATUS+="ha=- "
+if [ "${HA_NOTIFY:-1}" = "0" ]; then STATUS+="ha=aus "; else
+  send_ha "$BODY" && STATUS+="ha=ok " || STATUS+="ha=- "
+fi
 send_github "### 🩺 Wächter-Bericht"$'\n\n'"$(printf '%s\n' "${NOTE[@]}" | sed 's/^/- /')"$'\n\n'"$COSTLINE" && STATUS+="github=ok" || STATUS+="github=-"
 
 printf '%s\n' "$BODY"

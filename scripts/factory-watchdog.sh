@@ -156,11 +156,15 @@ send_github() {
   printf '%s\n' "$1" | gh issue comment "$issue" -R "$repo" --body-file - >/dev/null 2>&1
 }
 
-SENT=0
-send_telegram "🛠 Software Factory"$'\n'"$BODY" && SENT=1
-send_ha "$BODY" && SENT=1
-send_github "### 🩺 Wächter-Bericht"$'\n\n'"$(printf '%s\n' "${NOTE[@]}" | sed 's/^/- /')"$'\n\n'"$COSTLINE" && SENT=1
+STATUS=""
+send_telegram "🛠 Software Factory"$'\n'"$BODY" && STATUS+="telegram=ok " || STATUS+="telegram=- "
+send_ha "$BODY" && STATUS+="ha=ok " || STATUS+="ha=- "
+send_github "### 🩺 Wächter-Bericht"$'\n\n'"$(printf '%s\n' "${NOTE[@]}" | sed 's/^/- /')"$'\n\n'"$COSTLINE" && STATUS+="github=ok" || STATUS+="github=-"
 
 printf '%s\n' "$BODY"
-[ "$SENT" -eq 0 ] && echo "(Kein Kanal eingerichtet — Meldung nur hier.)" >&2
+echo "Kanäle: ${STATUS:-keiner eingerichtet}"
+case "$STATUS" in
+  *ok*) : ;;
+  *) echo "(Kein Kanal hat geantwortet — bitte Zugangsdaten in $SECRETS prüfen.)" >&2 ;;
+esac
 exit 0

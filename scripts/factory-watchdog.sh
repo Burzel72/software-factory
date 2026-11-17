@@ -139,11 +139,14 @@ send_telegram() {
     -d "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1" >/dev/null
 }
 
+# Meldung über ein HA-Skript an alle Geräte (Wandtablets + Handy).
+# Das Skript heißt standardmäßig script.factory_wache; die Ziele stehen dort,
+# damit man sie in Home Assistant ändern kann, ohne hier etwas anzufassen.
 send_ha() {
   [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ] && return 1
-  curl -sf -m 10 -X POST "$HA_URL/api/services/persistent_notification/create" \
+  curl -sf -m 15 -X POST "$HA_URL/api/services/script/factory_wache" \
     -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
-    -d "$(jq -n --arg t "Software Factory" --arg m "$1" '{title:$t, message:$m}')" >/dev/null
+    -d "$(jq -n --arg m "$1" '{message:$m}')" >/dev/null
 }
 
 send_github() {

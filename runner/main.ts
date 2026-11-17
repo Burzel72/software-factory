@@ -840,9 +840,39 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
   await syncPreviews(cfg, repo, issues).catch((e) => log("preview:error", { repo, error: String(e) }));
 }
 
+/** Geschlossene Aufträge aufräumen: Ein Lauf, der während des Schließens noch lief, kann einen
+ *  Zwischenstand (Review, Abnahme) als Label und Board-Spalte hinterlassen. Ein geschlossenes
+ *  Issue ist fertig — hier wird das geradegezogen, damit das Board die Wahrheit zeigt. */
+async function reconcileClosed(cfg: Config) {
+  for (const r of cfg.repos.map((x) => (typeof x === "string" ? x : x.repo))) {
+    let closed: { number: number; url: string; labels: { name: string }[] }[] = [];
+    try {
+      closed = JSON.parse(await gh(["issue", "list", "-R", r, "--state", "closed", "--label", cfg.label,
+        "--limit", "30", "--json", "number,url,labels"]));
+    } catch (e) {
+      log("reconcile:list-error", { repo: r, error: String(e) });
+      continue;
+    }
+    for (const it of closed) {
+      const stale = (it.labels ?? []).filter((l) => l.name.startsWith(`${cfg.label}:`) && l.name !== `${cfg.label}:done`);
+      if (stale.length === 0) continue;
+      try {
+        const args = ["issue", "edit", String(it.number), "-R", r, "--add-label", `${cfg.label}:done`];
+        for (const l of stale) args.push("--remove-label", l.name);
+        await gh(args);
+        await syncBoard(cfg, it.url, "done");
+        log("issue:reconciled", { repo: r, issue: it.number, removed: stale.map((l) => l.name) });
+      } catch (e) {
+        log("reconcile:error", { repo: r, issue: it.number, error: String(e) });
+      }
+    }
+  }
+}
+
 async function tick(cfg: Config) {
   let containers = await listContainers();
   blockerCache.clear();                 // Abhängigkeiten jeden Durchlauf frisch lesen
+  await reconcileClosed(cfg);           // geschlossene Aufträge auf "Fertig" ziehen
 
   // 1. Beendete Container auswerten, zu lange laufende stoppen und als Fehlschlag erfassen
   for (const c of containers) {

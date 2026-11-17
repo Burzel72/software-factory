@@ -22,6 +22,9 @@ REMIND_HOURS="${REMIND_HOURS:-6}"
 MODE="${1:-}"
 
 [ -r "$SECRETS" ] && set -a && . "$SECRETS" && set +a
+# Im systemd-Dienst ist HOME oft leer; gh sucht seine Zugangsdaten dort.
+export HOME="${HOME:-/root}"
+export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 REPOS=$(jq -r '.repos[] | if type == "string" then . else .repo end' "$CONFIG" 2>/dev/null)
 [ -z "$REPOS" ] && { echo "Keine Repos in $CONFIG gefunden." >&2; exit 2; }

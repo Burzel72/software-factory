@@ -37,4 +37,4 @@ Use [template.md](template.md):
 
 ## After Saving
 - `features/INDEX.md` status → `Architected`
-- Commit: `docs(<PROJ-ID>): Architektur für <name> (#<issue-nr>)`
+- Commit: `docs(#<issue-nr>): Architektur für <name>`

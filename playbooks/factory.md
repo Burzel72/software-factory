@@ -37,7 +37,7 @@ Ziel: eine klare Entscheidung in wenigen Minuten. **Kein Code, keine Commits, ke
 3. Entscheide: **Feature** (neues Verhalten) oder **Bug** (Verhalten weicht vom erwarteten ab).
 
 **Feature**
-- Suche die Zeile `Spec: <pfad>` im Issue oder in den Kommentaren, z. B. `Spec: features/PROJ-3-genre-sortierung/spec.md`.
+- Suche die Zeile `Spec: <pfad>` im Issue oder in den Kommentaren, z. B. `Spec: features/genre-sortierung/spec.md`.
 - **Keine Spec angegeben oder Datei fehlt auf dem Standard-Branch** → ablehnen:
   `factory-report rejected "Für dieses Feature gibt es keine Spec." --question "Bitte leg die Spec lokal mit /write-spec an, pushe sie auf den Standard-Branch und schreib hier eine Zeile 'Spec: features/<ordner>/spec.md'."`
 - **Spec vorhanden:** vollständig lesen, dazu `docs/stack.md`, `docs/PRD.md`, `features/INDEX.md` und einen Blick in den bestehenden Code. Prüfe:
@@ -67,7 +67,7 @@ Danach beendest du die Arbeit.
    - Bug: Fehler reproduzieren, Test schreiben, der ihn zeigt, und rot laufen lassen.
 2. **Umsetzung:** `factory-report implementing "..."`
    - Feature: Skill `build`. Bug: Fix. Commit-Reihenfolge beim Bug: erst der rote Test, dann der Fix.
-   - Kleine, sinnvolle Commits mit Feature-ID aus der Spec, sonst Issue-Nummer: `feat(PROJ-3): ... (#12)`, `fix(#12): ...`.
+   - Kleine, sinnvolle Commits, immer mit der **Issue-Nummer**: `feat(#12): ...`, `fix(#12): ...`. Es gibt keine zweite Nummernwelt (keine Projekt-IDs) — Issue und Pull Request sind die einzigen Nummern.
 3. **Tests:** `factory-report verifying "..."`
    - Skill `qa` → `qa-report.md` im Feature-Ordner (beim Bug: Ergebnis in den PR).
    - Bei sichtbaren Änderungen: Dev-Server starten (`.factory/setup.json` → `dev`), Screenshots mit `factory-screenshot`.
@@ -76,7 +76,7 @@ Danach beendest du die Arbeit.
    **Pflichtprüfungen sind unantastbar** — `factory-verify` erzwingt das: Streicht dein Branch einen Befehl, der auf `main` in `checks` steht, endet die Prüfung mit Exit 3. `.factory/setup.json` → `checks` liest du, du änderst sie nicht. Ein Check, der in dieser Umgebung nicht laufen kann (z. B. `docker build` ohne Docker im Container), wird **gemeldet**, nicht gestrichen. Ebenso bleibt die Form `{"name": "befehl"}` bestehen — eine Umwandlung in eine Liste oder ein Objekt ohne Befehle gilt als Manipulation der Prüfung.
 
    **Vor dem Review muss der Branch `main` enthalten.** `git fetch origin && git merge origin/main`; Konflikte so auflösen, dass **beide Seiten erhalten bleiben**. `factory-verify` meldet `upToDate: false`, wenn das fehlt, und der Runner lehnt den Bau dann ab.
-4. **Pull Request** gegen den Standard-Branch: `gh pr create --base "$FACTORY_DEFAULT_BRANCH" --head <branch> --title "<Typ>(<PROJ-ID oder #nummer>): <Titel>" --body-file <datei>`
+4. **Pull Request** gegen den Standard-Branch: `gh pr create --base "$FACTORY_DEFAULT_BRANCH" --head <branch> --title "<Typ>(#<nummer>): <Titel>" --body-file <datei>`
    Der PR-Text enthält in dieser Reihenfolge:
    1. `Closes #<nummer>`
    2. **Spec:** Link zur `spec.md` (bei Features)
@@ -106,6 +106,9 @@ Zwischenstände meldest du in dieser Phase nicht. Am Ende meldest du genau einma
 3. Starte die App (`.factory/setup.json` → `dev`) auf einem freien Port und teste **jedes Szenario selbst im Browser** (Playwright-Skript mit Node, Chromium ist installiert). Halte wichtige Zustände mit `factory-screenshot` fest.
 4. Prüfe zusätzlich kurz auf Offensichtliches: Konsolenfehler, kaputte Darstellung auf 375px, Eingaben, die die App zum Absturz bringen.
 5. Schreibe den **Abnahmebericht** in eine Datei: pro Szenario ✅ / ❌ mit einem Satz Begründung, gefundene Probleme mit Schritten zum Nachstellen, Checks, Screenshots.
+   Veröffentliche ihn **als Review** am Pull Request, nicht als gewöhnlichen Kommentar:
+   `gh pr review <PR-URL> --comment --body-file <bericht>`
+   So erscheint die Entscheidung dort, wo Menschen sie suchen (Reiter „Reviews"). `--approve` ist bewusst nicht erlaubt: Der Bot ist Autor des PRs, eine Freigabe muss von einem Menschen kommen.
 6. Entscheidung:
    - **Alle Szenarien bestanden, keine schweren Probleme** → `factory-report accepted "<1–2 Sätze>" --pr <url> --body-file <bericht>`
    - **Szenario nicht bestanden oder schweres Problem** → `factory-report rework "<1–2 Sätze>" --body-file <befunde>`. Die Befunde müssen ohne Rückfrage verständlich und nachstellbar sein.

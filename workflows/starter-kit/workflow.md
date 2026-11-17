@@ -17,7 +17,7 @@ Pro Feature ein Ordner, Spec, Architektur und Testbericht getrennt:
 ```
 features/
   INDEX.md                         Übersicht aller Features + Status + nächste freie ID
-  PROJ-3-genre-sortierung/
+  genre-sortierung/
     spec.md                        WAS: User Stories, Akzeptanzkriterien, Edge Cases (Vertrag, von dir)
     design.md                      WIE: Komponenten, Datenmodell, Tech-Entscheidungen (Factory)
     qa-report.md                   ERGEBNIS: Testlauf gegen die Akzeptanzkriterien (Factory)

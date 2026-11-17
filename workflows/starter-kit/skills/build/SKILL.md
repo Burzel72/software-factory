@@ -58,9 +58,9 @@ From `design.md` → "Backend nötig?". Backend means: database, user accounts, 
 ## Commits
 One commit per layer, e.g.:
 ```
-feat(<PROJ-ID>): Datenmodell und API für <name> (#<issue-nr>)
-feat(<PROJ-ID>): Oberfläche für <name> (#<issue-nr>)
-test(<PROJ-ID>): Tests für <name> (#<issue-nr>)
+feat(#<issue-nr>): Datenmodell und API für <name>
+feat(#<issue-nr>): Oberfläche für <name>
+test(#<issue-nr>): Tests für <name>
 ```
 
 ## Context Recovery

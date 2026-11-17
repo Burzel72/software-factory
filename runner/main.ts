@@ -948,6 +948,22 @@ async function main() {
   }
   CONTAINER_UID = Number((await docker(["run", "--rm", "--entrypoint", "id", cfg.image, "-u"])).trim());
   FACTORY_LOGIN = (await gh(["api", "user", "--jq", ".login"])).trim();
+  // Arbeitet die Fabrik mit dem Konto, dem die Repos gehören? Dann kann niemand ihre PRs
+  // formal freigeben (GitHub verbietet die Freigabe des eigenen PRs) und die Herkunft ist
+  // nicht nachvollziehbar. Für Einpersonen-Testbetrieb hinnehmbar, für echte Nutzung nicht.
+  if (process.env.GH_TOKEN) {
+    log("identity:token", { hinweis: "GH_TOKEN aus der Umgebung wird verwendet (eigene Identität möglich)." });
+  } else {
+    for (const r of repoList(cfg)) {
+      const owner = r.repo.split("/")[0];
+      if (owner.toLowerCase() === FACTORY_LOGIN.toLowerCase()) {
+        log("identity:warning", {
+          repo: r.repo, login: FACTORY_LOGIN,
+          hinweis: "Die Fabrik arbeitet mit dem Konto des Repo-Eigentümers. Formale Freigaben sind so nicht möglich — für eine eigene Identität GH_TOKEN in secrets.env setzen.",
+        });
+      }
+    }
+  }
   await initBoard(cfg);
   log("runner:started", {
     login: FACTORY_LOGIN, allowedUsers: cfg.allowedUsers ?? [],

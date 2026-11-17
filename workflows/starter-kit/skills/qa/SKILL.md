@@ -34,7 +34,7 @@ Start the dev server (`.factory/setup.json` → `dev`) on a free port, test each
 
 ### 4. Write tests
 - Unit tests for non-trivial logic that is not covered yet
-- E2E test per passing acceptance criterion if the stack has an E2E framework (one test per AK, named after the PROJ-ID)
+- E2E test per passing acceptance criterion if the stack has an E2E framework (one test per AK, named after the feature folder)
 - All tests green
 
 ### 5. Screenshots
@@ -57,4 +57,4 @@ Use [template.md](template.md): each AK/EC with result, bugs with severity and r
 No feature folder needed. Verify the failing test is now green, test the reported scenario manually, run regression on related features. Put the result into the PR body instead of a qa-report.md.
 
 ## Commit
-`test(<PROJ-ID>): QA-Bericht für <name> (#<issue-nr>)`
+`test(#<issue-nr>): QA-Bericht für <name>`

@@ -200,6 +200,29 @@ sed -n 's/^OPENROUTER_API_KEY=//p' ~/.hermes/secrets/softwarefactory-openrouter.
     sudo chmod 600 /etc/software-factory/secrets.env'
 ```
 
+### 4.2b Eigene Identität für die Fabrik (GH_TOKEN)
+
+Ohne eigenes Konto arbeitet die Fabrik mit dem Zugang des Repo-Eigentümers. Folge: Alle PRs
+erscheinen als dessen Arbeit, und GitHub verweigert die Freigabe („You cannot approve your own
+pull request"). Für den Testbetrieb ist das hinnehmbar, für echte Nutzung nicht.
+
+**Umstellung ohne Codeänderung:** `gh` liest `GH_TOKEN` aus der Umgebung. Zeile in
+`/etc/software-factory/secrets.env` ergänzen und Dienst neu starten:
+
+```
+GH_TOKEN=ghp_…        # Token des Fabrik-Kontos, Scope: repo
+```
+
+Das Konto braucht Schreibrecht am Projekt (Collaborator oder Team). Danach meldet der Runner
+beim Start `identity:token` statt `identity:warning`, und die PRs stammen vom Fabrik-Konto —
+formale Reviews sind damit möglich.
+
+Beim Einrichten einer neuen Identität prüfen, dass sie **nicht** der Eigentümer ist:
+
+```bash
+sudo bash -lc 'gh api user --jq .login'      # muss das Fabrik-Konto zeigen
+```
+
 ### 4.3 Repository und Setup
 
 ```bash

@@ -21,7 +21,14 @@ REVIEW_HOURS="${REVIEW_HOURS:-3}"
 REMIND_HOURS="${REMIND_HOURS:-6}"
 MODE="${1:-}"
 
-[ -r "$SECRETS" ] && set -a && . "$SECRETS" && set +a
+# Zugangsdaten Zeile für Zeile lesen statt "sourcen": ein Wert mit Sonderzeichen
+# (oder ein Platzhalter) darf nicht die ganze Datei unbrauchbar machen.
+secret() { [ -r "$SECRETS" ] && sed -n "s/^$1=//p" "$SECRETS" | head -1 | tr -d '"' || true; }
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-$(secret TELEGRAM_BOT_TOKEN)}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-$(secret TELEGRAM_CHAT_ID)}"
+HA_URL="${HA_URL:-$(secret HA_URL)}"
+HA_TOKEN="${HA_TOKEN:-$(secret HA_TOKEN)}"
+export TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID HA_URL HA_TOKEN
 # Im systemd-Dienst ist HOME oft leer; gh sucht seine Zugangsdaten dort.
 export HOME="${HOME:-/root}"
 export PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"

@@ -37,6 +37,18 @@ COST=$(journalctl -u software-factory --since today --no-pager 2>/dev/null \
 
 alert() { ALERTS+=("$1"); }
 
+# --- 0. Sieht der Wächter überhaupt? ----------------------------------------
+# Wenn die Abfragen scheitern, darf hier nicht "alles ruhig" stehen.
+PREFLIGHT_FAIL=0
+if ! gh api user --jq .login >/dev/null 2>&1; then
+  alert "GitHub-Abfrage fehlgeschlagen — der Wächter ist blind (Token, Netz oder gh-Einrichtung prüfen)."
+  PREFLIGHT_FAIL=1
+fi
+if ! jq -e . "$CONFIG" >/dev/null 2>&1; then
+  alert "Konfiguration ${CONFIG} ist nicht lesbar — der Wächter kennt die Projekte nicht."
+  PREFLIGHT_FAIL=1
+fi
+
 # --- 1. Läuft der Runner überhaupt? -----------------------------------------
 if ! systemctl is-active --quiet software-factory; then
   alert "Der Runner-Dienst ist nicht aktiv. Es wird gerade nichts gebaut."
@@ -54,6 +66,7 @@ done < <(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep '^sf-' | grep -
 
 # --- 3. Je Projekt -----------------------------------------------------------
 for REPO in $REPOS; do
+  [ "$PREFLIGHT_FAIL" = 1 ] && break
   # Aufträge, die einen Menschen brauchen: failed
   while IFS=$'\t' read -r N T; do
     [ -z "${N:-}" ] && continue

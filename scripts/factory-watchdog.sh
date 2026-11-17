@@ -117,6 +117,21 @@ fi
 COSTLINE="Kosten heute: ${COST:-0} $."
 BODY="$(printf '%s\n' "${NOTE[@]}")"$'\n\n'"${COSTLINE}"
 
+# Zustand für die Dashboard-Kachel hinterlegen — auch wenn nichts gemeldet wird,
+# damit dort "letzter Blick" und Uhrzeit stehen.
+write_ha_status() {
+  [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ] && return 0
+  local text
+  text=$(printf '%s' "${ALERTS[0]:-Alles ruhig}" | cut -c1-250)
+  curl -sf -m 10 -X POST "$HA_URL/api/services/input_text/set_value" \
+    -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg v "$text" '{entity_id:"input_text.fabrik_letzter_befund", value:$v}')" >/dev/null || true
+  curl -sf -m 10 -X POST "$HA_URL/api/services/input_datetime/set_datetime" \
+    -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg d "$(date +'%Y-%m-%d %H:%M:%S')" '{entity_id:"input_datetime.fabrik_befund_vom", datetime:$d}')" >/dev/null || true
+}
+write_ha_status
+
 if [ "$MODE" = "--status" ]; then
   printf '%s\n' "$BODY"; exit 0
 fi

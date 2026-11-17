@@ -73,7 +73,7 @@ Danach beendest du die Arbeit.
    - Bei sichtbaren Änderungen: Dev-Server starten (`.factory/setup.json` → `dev`), Screenshots mit `factory-screenshot`.
    - Committen, pushen, dann `factory-verify`. Schlägt etwas fehl: zurück zur Umsetzung (maximal drei Runden). Bleibt es rot: `factory-report failed "<was nicht grün wird und warum>"`.
 
-   **Pflichtprüfungen sind unantastbar.** `.factory/setup.json` → `checks` liest du, du änderst sie nicht. Ein Check, der in dieser Umgebung nicht laufen kann (z. B. `docker build` ohne Docker im Container), wird **gemeldet**, nicht gestrichen. Ebenso bleibt die Form `{"name": "befehl"}` bestehen — eine Umwandlung in eine Liste oder ein Objekt ohne Befehle gilt als Manipulation der Prüfung.
+   **Pflichtprüfungen sind unantastbar** — `factory-verify` erzwingt das: Streicht dein Branch einen Befehl, der auf `main` in `checks` steht, endet die Prüfung mit Exit 3. `.factory/setup.json` → `checks` liest du, du änderst sie nicht. Ein Check, der in dieser Umgebung nicht laufen kann (z. B. `docker build` ohne Docker im Container), wird **gemeldet**, nicht gestrichen. Ebenso bleibt die Form `{"name": "befehl"}` bestehen — eine Umwandlung in eine Liste oder ein Objekt ohne Befehle gilt als Manipulation der Prüfung.
 
    **Vor dem Review muss der Branch `main` enthalten.** `git fetch origin && git merge origin/main`; Konflikte so auflösen, dass **beide Seiten erhalten bleiben**. `factory-verify` meldet `upToDate: false`, wenn das fehlt, und der Runner lehnt den Bau dann ab.
 4. **Pull Request** gegen den Standard-Branch: `gh pr create --base "$FACTORY_DEFAULT_BRANCH" --head <branch> --title "<Typ>(<PROJ-ID oder #nummer>): <Titel>" --body-file <datei>`

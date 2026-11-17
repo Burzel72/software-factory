@@ -45,6 +45,30 @@ if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
   fi
 fi
 
+# Pflichtprüfungen dürfen nicht verschwinden. Diese Regel liegt bewusst hier im Image und
+# nicht im Repo: ein Lauf, der seine eigenen Prüfungen entfernt, kann sie so nicht abschalten.
+# Verglichen wird mit der Fassung auf main — dort steht, was verbindlich ist.
+if git rev-parse --verify -q origin/main >/dev/null 2>&1 && git cat-file -e origin/main:.factory/setup.json 2>/dev/null; then
+  base_cmds=$(git show origin/main:.factory/setup.json \
+    | jq -r '.checks | if type == "object" then .[] elif type == "array" then .[] else empty end' 2>/dev/null \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | sort -u)
+  now_cmds=$(jq -r '.checks | if type == "object" then .[] elif type == "array" then .[] else empty end' .factory/setup.json 2>/dev/null \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' | sort -u)
+  if [ -n "${base_cmds:-}" ]; then
+    removed=$(comm -23 <(printf '%s\n' "$base_cmds") <(printf '%s\n' "$now_cmds"))
+    if [ -n "$removed" ]; then
+      {
+        echo "Pflichtprüfungen aus main fehlen in diesem Branch:"
+        printf '%s\n' "$removed" | sed 's/^/  - /'
+        echo
+        echo "Prüfungen werden nicht entfernt, sondern erfüllt. Wenn eine Prüfung in dieser"
+        echo "Umgebung nicht laufen kann, gehört das in den Bericht — nicht aus der Liste."
+      } >&2
+      exit 3
+    fi
+  fi
+fi
+
 SHA=$(git rev-parse HEAD)
 RESULTS="[]"; FAILED=0
 MD="| Check | Befehl | Ergebnis |\n|---|---|---|\n"

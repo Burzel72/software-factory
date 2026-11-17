@@ -445,6 +445,11 @@ async function checkBuild(repo: string, issue: number, dir: string, prUrl?: stri
   try { head = (await gh(["api", `repos/${repo}/git/ref/heads/factory/${issue}`, "--jq", ".object.sha"])).trim(); } catch {}
   if (!head) return `Der Branch \`factory/${issue}\` wurde nicht gepusht.`;
   if (verify.sha !== head) return `Die Checks liefen auf \`${String(verify.sha).slice(0, 7)}\`, gepusht ist aber \`${head.slice(0, 7)}\`. Nach dem letzten Commit muss \`factory-verify\` erneut laufen.`;
+  // Ein Branch, der main nicht enthält, kann beim Merge Funktionen verwerfen, die inzwischen
+  // gemergt wurden. Dann gilt: erst main einnehmen, dann erneut prüfen.
+  if (verify.upToDate === false) {
+    return "Der Branch enthält `main` nicht. Bitte `git fetch origin && git merge origin/main`, Konflikte auflösen (bestehende Funktionen erhalten), dann `factory-verify` erneut ausführen.";
+  }
   if (prUrl) {
     try {
       const files = (await gh(["pr", "diff", prUrl, "--name-only"])).split("\n");

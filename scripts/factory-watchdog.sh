@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Software Factory – Wächter
+#
+# Prüft in kurzen Abständen, ob die Fabrik hängt, ob etwas auf einen Menschen wartet
+# oder ob ein Pull Request nicht mehr zusammenpasst. Meldet nur Abweichungen.
+#
+# Kanäle (alle optional, in dieser Reihenfolge):
+#   1. GitHub-Kommentar auf dem Wächter-Issue (funktioniert immer, wenn gh eingerichtet ist)
+#   2. Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID in /etc/software-factory/secrets.env)
+#   3. Home Assistant (HA_URL + HA_TOKEN, z. B. http://192.168.0.82:8123)
+#
+# Aufruf:  factory-watchdog            (einmal prüfen)
+#          factory-watchdog --status   (nur ausgeben, nichts senden)
+set -uo pipefail
+
+CONFIG="${FACTORY_CONFIG:-/etc/software-factory/config.json}"
+STATE="${WATCHDOG_STATE:-/var/lib/software-factory/watchdog.state}"
+SECRETS="${WATCHDOG_SECRETS:-/etc/software-factory/secrets.env}"
+STUCK_MINUTES="${STUCK_MINUTES:-90}"
+REVIEW_HOURS="${REVIEW_HOURS:-3}"
+REMIND_HOURS="${REMIND_HOURS:-6}"
+MODE="${1:-}"
+
+[ -r "$SECRETS" ] && set -a && . "$SECRETS" && set +a
+
+REPOS=$(jq -r '.repos[] | if type == "string" then . else .repo end' "$CONFIG" 2>/dev/null)
+[ -z "$REPOS" ] && { echo "Keine Repos in $CONFIG gefunden." >&2; exit 2; }
+
+ALERTS=()
+NOTE=()
+
+alert() { ALERTS+=("$1"); }
+
+# --- 1. Läuft der Runner überhaupt? -----------------------------------------
+if ! systemctl is-active --quiet software-factory; then
+  alert "Der Runner-Dienst ist nicht aktiv. Es wird gerade nichts gebaut."
+fi
+
+# --- 2. Laufende Container ohne Fortschritt ---------------------------------
+while read -r NAME; do
+  [ -z "$NAME" ] && continue
+  OUT=$(sudo docker inspect "$NAME" --format '{{.State.StartedAt}}' 2>/dev/null) || continue
+  START=$(date -d "$OUT" +%s 2>/dev/null) || continue
+  MIN=$(( ( $(date +%s) - START ) / 60 ))
+  [ "$MIN" -lt "$STUCK_MINUTES" ] && continue
+  alert "Ein Lauf arbeitet seit ${MIN} Minuten (${NAME}). Grenze: ${STUCK_MINUTES}."
+done < <(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep '^sf-' | grep -v caddy)
+
+# --- 3. Je Projekt -----------------------------------------------------------
+for REPO in $REPOS; do
+  # Aufträge, die einen Menschen brauchen: failed
+  while read -r N T; do
+    [ -z "$N" ] && continue
+    alert "[${REPO##*/}] Auftrag #${N} ist fehlgeschlagen: ${T} — Kommentar im Issue lesen, dann Label \`factory:new\` setzen."
+  done < <(gh issue list -R "$REPO" --label factory:failed --state open --json number,title --jq '.[] | "\(.number)\t\(.title)"' 2>/dev/null)
+
+  # Aufträge, die auf eine Freigabe warten (Review) — Erinnerung nach REVIEW_HOURS
+  while read -r N T U; do
+    [ -z "$N" ] && continue
+    AGE=$(( ( $(date +%s) - $(date -d "$U" +%s) ) / 3600 ))
+    [ "$AGE" -lt "$REVIEW_HOURS" ] && continue
+    alert "[${REPO##*/}] PR für #${N} wartet seit ${AGE} h auf deine Freigabe: ${T}"
+  done < <(gh issue list -R "$REPO" --label factory:review --state open --json number,title,updatedAt --jq '.[] | "\(.number)\t\(.title)\t\(.updatedAt)"' 2>/dev/null)
+
+  # Pull Requests: Konflikt oder veraltete Grundlage
+  while read -r N BR; do
+    [ -z "$N" ] && continue
+    STATUS=$(gh api "repos/$REPO/compare/main...${BR}" --jq '.status' 2>/dev/null)
+    case "$STATUS" in
+      behind|diverged) alert "[${REPO##*/}] PR #${N} enthält \`main\` nicht (${STATUS}) — beim Merge können Funktionen verloren gehen." ;;
+    esac
+  done < <(gh pr list -R "$REPO" --state open --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null)
+
+  while read -r N T; do
+    [ -z "$N" ] && continue
+    alert "[${REPO##*/}] PR #${N} hat einen Konflikt mit \`main\` und braucht eine neue Grundlage: ${T}"
+  done < <(gh pr list -R "$REPO" --state open --json number,title,mergeable --jq '.[] | select(.mergeable=="CONFLICTING") | "\(.number)\t\(.title)"' 2>/dev/null)
+
+  # Tageskosten (aus dem Dienstprotokoll)
+  COST=$(journalctl -u software-factory --since today --no-pager 2>/dev/null | grep -o '"costUsd":[0-9.]*' | cut -d: -f2 | awk '{s+=$1} END {printf "%.2f", s}')
+done
+
+# --- Meldung zusammenbauen ---------------------------------------------------
+if [ ${#ALERTS[@]} -eq 0 ]; then
+  NOTE=("Alles ruhig. Keine Aufträge hängen, nichts wartet auf dich.")
+else
+  NOTE=("${ALERTS[@]}")
+fi
+COSTLINE="Kosten heute: ${COST:-0} $."
+BODY="$(printf '%s\n' "${NOTE[@]}")"$'\n\n'"${COSTLINE}"
+
+if [ "$MODE" = "--status" ]; then
+  printf '%s\n' "$BODY"; exit 0
+fi
+
+# Doppelte Meldungen vermeiden: nur bei geänderter Lage oder nach REMIND_HOURS
+FP=$(printf '%s' "$BODY" | sha256sum | cut -d' ' -f1)
+mkdir -p "$(dirname "$STATE")"
+LAST_FP=""; LAST_AT=0
+[ -r "$STATE" ] && { read -r LAST_FP LAST_AT < "$STATE" || true; }
+NOW=$(date +%s)
+AGE_H=$(( (NOW - ${LAST_AT:-0}) / 3600 ))
+if [ "$FP" = "${LAST_FP:-}" ] && [ "$AGE_H" -lt "$REMIND_HOURS" ]; then
+  exit 0
+fi
+echo "$FP $NOW" > "$STATE"
+
+send_telegram() {
+  [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ] && return 1
+  curl -sf -m 10 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=$1" >/dev/null
+}
+
+send_ha() {
+  [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ] && return 1
+  curl -sf -m 10 -X POST "$HA_URL/api/services/persistent_notification/create" \
+    -H "Authorization: Bearer $HA_TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg t "Software Factory" --arg m "$1" '{title:$t, message:$m}')" >/dev/null
+}
+
+send_github() {
+  local issue="${WATCHDOG_ISSUE:-}"
+  [ -z "$issue" ] && return 1
+  local repo="${REPOS%%$'\n'*}"
+  printf '%s\n' "$1" | gh issue comment "$issue" -R "$repo" --body-file - >/dev/null 2>&1
+}
+
+SENT=0
+send_telegram "🛠 Software Factory"$'\n'"$BODY" && SENT=1
+send_ha "$BODY" && SENT=1
+send_github "### 🩺 Wächter-Bericht"$'\n\n'"$(printf '%s\n' "${NOTE[@]}" | sed 's/^/- /')"$'\n\n'"$COSTLINE" && SENT=1
+
+printf '%s\n' "$BODY"
+[ "$SENT" -eq 0 ] && echo "(Kein Kanal eingerichtet — Meldung nur hier.)" >&2
+exit 0

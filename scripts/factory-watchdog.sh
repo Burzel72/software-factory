@@ -29,6 +29,12 @@ REPOS=$(jq -r '.repos[] | if type == "string" then . else .repo end' "$CONFIG" 2
 ALERTS=()
 NOTE=()
 
+# Tageskosten einmal ermitteln
+COST=$(journalctl -u software-factory --since today --no-pager 2>/dev/null \
+  | grep -o '"costUsd":[0-9.]*' | cut -d: -f2 \
+  | awk '{s+=$1} END {printf "%.2f", s+0}')
+[ -z "$COST" ] && COST="0.00"
+
 alert() { ALERTS+=("$1"); }
 
 # --- 1. Läuft der Runner überhaupt? -----------------------------------------
@@ -49,35 +55,34 @@ done < <(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep '^sf-' | grep -
 # --- 3. Je Projekt -----------------------------------------------------------
 for REPO in $REPOS; do
   # Aufträge, die einen Menschen brauchen: failed
-  while read -r N T; do
-    [ -z "$N" ] && continue
-    alert "[${REPO##*/}] Auftrag #${N} ist fehlgeschlagen: ${T} — Kommentar im Issue lesen, dann Label \`factory:new\` setzen."
-  done < <(gh issue list -R "$REPO" --label factory:failed --state open --json number,title --jq '.[] | "\(.number)\t\(.title)"' 2>/dev/null)
+  while IFS=$'\t' read -r N T; do
+    [ -z "${N:-}" ] && continue
+    alert "[${REPO##*/}] Auftrag #${N} ist fehlgeschlagen: ${T} — Kommentar im Issue lesen, dann Label factory:new setzen."
+  done < <(gh issue list -R "$REPO" --label factory:failed --state open --json number,title --jq '.[] | [.number, .title] | @tsv' 2>/dev/null)
 
   # Aufträge, die auf eine Freigabe warten (Review) — Erinnerung nach REVIEW_HOURS
-  while read -r N T U; do
-    [ -z "$N" ] && continue
-    AGE=$(( ( $(date +%s) - $(date -d "$U" +%s) ) / 3600 ))
+  while IFS=$'\t' read -r N T U; do
+    [ -z "${N:-}" ] && continue
+    THEN=$(date -d "$U" +%s 2>/dev/null) || continue
+    AGE=$(( ( $(date +%s) - THEN ) / 3600 ))
     [ "$AGE" -lt "$REVIEW_HOURS" ] && continue
     alert "[${REPO##*/}] PR für #${N} wartet seit ${AGE} h auf deine Freigabe: ${T}"
-  done < <(gh issue list -R "$REPO" --label factory:review --state open --json number,title,updatedAt --jq '.[] | "\(.number)\t\(.title)\t\(.updatedAt)"' 2>/dev/null)
+  done < <(gh issue list -R "$REPO" --label factory:review --state open --json number,title,updatedAt --jq '.[] | [.number, .title, .updatedAt] | @tsv' 2>/dev/null)
 
   # Pull Requests: Konflikt oder veraltete Grundlage
-  while read -r N BR; do
-    [ -z "$N" ] && continue
+  while IFS=$'\t' read -r N BR; do
+    [ -z "${N:-}" ] && continue
     STATUS=$(gh api "repos/$REPO/compare/main...${BR}" --jq '.status' 2>/dev/null)
     case "$STATUS" in
       behind|diverged) alert "[${REPO##*/}] PR #${N} enthält \`main\` nicht (${STATUS}) — beim Merge können Funktionen verloren gehen." ;;
     esac
-  done < <(gh pr list -R "$REPO" --state open --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null)
+  done < <(gh pr list -R "$REPO" --state open --json number,headRefName --jq '.[] | [.number, .headRefName] | @tsv' 2>/dev/null)
 
-  while read -r N T; do
-    [ -z "$N" ] && continue
+  while IFS=$'\t' read -r N T; do
+    [ -z "${N:-}" ] && continue
     alert "[${REPO##*/}] PR #${N} hat einen Konflikt mit \`main\` und braucht eine neue Grundlage: ${T}"
-  done < <(gh pr list -R "$REPO" --state open --json number,title,mergeable --jq '.[] | select(.mergeable=="CONFLICTING") | "\(.number)\t\(.title)"' 2>/dev/null)
+  done < <(gh pr list -R "$REPO" --state open --json number,title,mergeable --jq '.[] | select(.mergeable=="CONFLICTING") | [.number, .title] | @tsv' 2>/dev/null)
 
-  # Tageskosten (aus dem Dienstprotokoll)
-  COST=$(journalctl -u software-factory --since today --no-pager 2>/dev/null | grep -o '"costUsd":[0-9.]*' | cut -d: -f2 | awk '{s+=$1} END {printf "%.2f", s}')
 done
 
 # --- Meldung zusammenbauen ---------------------------------------------------

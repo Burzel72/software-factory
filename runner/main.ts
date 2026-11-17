@@ -35,6 +35,8 @@ export type Config = {
   workflow: string;
   pollSeconds: number;
   jobTimeoutMinutes: number;
+  /** Ein Lauf, der so viele Minuten keinen Fortschritt meldet, gilt als hängend und wird beendet. */
+  stallMinutes?: number;
   image: string;
   dataDir: string;
   containerMemory: string;
@@ -91,7 +93,7 @@ export function loadConfig(path = CONFIG_PATH): Config {
   const c = JSON.parse(readFileSync(path, "utf8"));
   const cfg: Config = {
     label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
-    jobTimeoutMinutes: 90, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
+    jobTimeoutMinutes: 90, stallMinutes: 30, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
     containerMemory: "3g", maxReworks: 2, ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent
@@ -852,6 +854,29 @@ async function tick(cfg: Config) {
         await docker(["kill", c.name]).catch(() => {});
         await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
           `Zeitlimit von ${cfg.jobTimeoutMinutes} Minuten überschritten.`);
+        continue;
+      }
+      // Stillstand: weder Statusmeldung noch Agentenausgabe seit stallMinutes → beenden.
+      const stall = cfg.stallMinutes ?? 30;
+      const dir = jobDir(cfg, c.repo, c.issue);
+      const st = join(dir, "status.json");
+      const activity = [st, join(dir, "agent.jsonl")]
+        .filter((f) => existsSync(f))
+        .reduce((max, f) => Math.max(max, statSync(f).mtimeMs), 0);
+      const quietMinutes = activity ? (Date.now() - activity) / 60000 : minutes;
+      if (minutes > stall && quietMinutes > stall) {
+        log("job:stalled", { repo: c.repo, issue: c.issue, minutes: Math.round(minutes), quiet: Math.round(quietMinutes) });
+        await docker(["kill", c.name]).catch(() => {});
+        await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
+          `Kein Fortschritt seit ${Math.round(quietMinutes)} Minuten — Lauf beendet. Letzter gemeldeter Stand: ${String(readJobJson(st)?.status ?? "unbekannt")}.`);
+        continue;
+      }
+      // Ergebnis gemeldet, aber der Container läuft weiter: als normal beendet auswerten.
+      const reported = String(readJobJson(st)?.status ?? "");
+      if (["built", "review", "accepting", "question", "failed"].includes(reported) && quietMinutes > 5) {
+        log("job:selfreport-exit", { repo: c.repo, issue: c.issue, status: reported, quiet: Math.round(quietMinutes) });
+        await docker(["kill", c.name]).catch(() => {});
+        await finish(cfg, { ...c, running: false, exitCode: 0, finishedAt: new Date().toISOString() });
       }
     } catch (e) {
       log("finish:error", { repo: c.repo, issue: c.issue, error: String(e) });

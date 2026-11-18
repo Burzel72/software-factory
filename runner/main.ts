@@ -663,11 +663,14 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   // Zeile identisch ist. Genau so lief ein Lauf 276 Schritte lang im Kreis.
   const grob: string[] = [];
   for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
-    // Dieselbe Datei mehrfach zu lesen ist beim Arbeiten normal (lesen, ändern, erneut lesen).
-    // Als Schleife zählt nur, was Wirkung hat: Befehle, Schreibvorgänge, Berichte.
-    if (m[1] !== "read") sigs.push(`${m[1]}|${m[2]}`);
+    // Nur Befehle zählen: Bei `edit`/`write`/`read` ist die Signatur der Dateipfad — zehn
+    // Änderungen an derselben Datei sähen damit identisch aus und würden eine arbeitende
+    // Sitzung abräumen (beobachtet am 18.11.: Bau starb nach zehn Edits an einer Datei).
+    const istBefehl = m[1] === "shell" || m[1] === "bash";
+    if (!istBefehl) continue;
+    sigs.push(`${m[1]}|${m[2]}`);
     const istSkript = m[2].includes("<<") || m[2].includes("EOF");
-    if (!istSkript && m[1] !== "read") grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
+    if (!istSkript) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
   }
   const recent = sigs.slice(-WINDOW);
   const recentGrob = grob.slice(-WINDOW);

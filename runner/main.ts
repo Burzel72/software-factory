@@ -1329,7 +1329,7 @@ async function tick(cfg: Config) {
       const costLimit = cfg.maxCostPerRun ?? 2;
       const turnLimit = pl.turns ?? cfg.maxTurnsPerRun ?? 250;
       const repeatLimit = cfg.maxRepeatCalls ?? 10;
-      const similarLimit = cfg.maxSimilarCalls ?? 8;
+      // maxSimilarCalls/maxSimilarCalls sind nur noch Messgrößen (siehe unten), keine Bremse.
       const errorLimit = cfg.maxErrorStreak ?? 5;
 
       // Zweite, unabhängige Kostenmessung beim Anbieter: Sie gilt auch dann, wenn das Parsen der
@@ -1350,7 +1350,10 @@ async function tick(cfg: Config) {
       else if (burn.turns > turnLimit) { art = "schritte"; why = `Schrittbremse für ${c.phase}: ${burn.turns} Schritte (Grenze ${turnLimit}).`; }
       else if (burn.errorStreak >= errorLimit) { art = "fehlerkaskade"; why = `Fehlerkaskade: ${burn.errorStreak} Aufrufe hintereinander fehlgeschlagen (Grenze ${errorLimit}).`; }
       else if (burn.repeat >= repeatLimit) { art = "schleife"; why = `Schleifenbremse: ${burn.repeat} gleiche Aufrufe hintereinander (${burn.repeatSig.split("|")[0]}).`; }
-      else if (burn.similar >= similarLimit) { art = "schleife-aehnlich"; why = `Schleifenbremse: ${burn.similar} gleichartige Aufrufe hintereinander (gleicher Befehl, anderer Parameter).`; }
+      // Die frühere Ähnlichkeitsbremse („gleicher Befehl, anderer Parameter") ist bewusst entfernt:
+      // Sie löste am 18.11. siebenmal bei arbeitenden Sitzungen aus und fing keinen einzigen echten
+      // Fall. `burn.similar` wird weiter gemessen und protokolliert — gebremst wird nur bei
+      // exakter Wiederholung, Kosten, Schritten, Zeit und Stillstand.
 
       if (why) {
         log("job:limit", {

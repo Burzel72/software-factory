@@ -337,7 +337,7 @@ test("Budget-Reset braucht einen Menschen, der sich selbst als Entscheider nennt
   assert.equal(ok?.login, "Burzel72");
 });
 
-test("jobBurn erkennt gleichartige Aufrufe mit wechselnden Parametern", () => {
+test("jobBurn misst gleichartige Aufrufe (Bremse entfernt: nur Messwert)", () => {
   const dir = mkdtempSync(join(tmpdir(), "similar-"));
   const zeilen: string[] = [];
   // So lief der echte 276-Schritte-Lauf im Kreis: gleicher Befehl, anderer Suchbegriff.

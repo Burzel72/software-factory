@@ -1385,8 +1385,15 @@ async function tick(cfg: Config) {
           errorStreak: burn.errorStreak, aufruf: burn.repeatSig.slice(0, 60),
         });
         await docker(["kill", c.name]).catch(() => {});
-        await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
-          `${why} Das deutet auf eine Schleife hin — bitte den Auftrag enger fassen (ein Ziel, klare Grenzen) statt nur neu zu starten.`);
+        // Abschluss-Wiederholung („echo … fertig" in Dauerschleife): Der Agent hat geliefert und
+        // wiederholt nur seine Meldung. Der Lauf wird beendet, aber als *sauber beendet* übergeben,
+        // damit `finish` die Arbeit prüft (Verify, Commits, Spec unberührt) statt sie als
+        // Fehlschlag zu verwerfen. Ist die Arbeit unvollständig, scheitert er dort mit Begründung.
+        const abschlussSchleife = art === "schleife" && c.phase === "build" && /echo\b/i.test(burn.repeatSig);
+        if (abschlussSchleife) log("job:echo-abschluss", { repo: c.repo, issue: c.issue, repeat: burn.repeat });
+        await finish(cfg, { ...c, running: false, exitCode: abschlussSchleife ? 0 : 137, finishedAt: new Date().toISOString() },
+          abschlussSchleife ? undefined
+            : `${why} Das deutet auf eine Schleife hin — bitte den Auftrag enger fassen (ein Ziel, klare Grenzen) statt nur neu zu starten.`);
         continue;
       }
       if (minutes > timeLimit) {

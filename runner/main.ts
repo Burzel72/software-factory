@@ -468,6 +468,16 @@ async function checkBuild(repo: string, issue: number, dir: string, prUrl?: stri
   return null;
 }
 
+// Guthaben-Sperre: Ist das Guthaben beim Modellanbieter aufgebraucht, scheitert jeder weitere
+// Lauf an derselben Wand — und die Fabrik würde endlos Versuche verbrennen. Deshalb einmal
+// erkennen, melden und die Warteschlange anhalten, statt im Minutentakt zu wiederholen.
+let budgetHaltUntil = 0;
+
+/** Steht in der Ausgabe des Laufs ein Guthaben-Fehler des Anbieters? */
+export function creditProblem(text: string): boolean {
+  return /in_flight_budget_exhausted|requires more credits|insufficient_credits|"code"\s*:\s*402\b/i.test(text);
+}
+
 /** Wertet einen beendeten Container aus und räumt ihn weg. `reason` = Grund, warum der Runner ihn beendet hat. */
 async function finish(cfg: Config, c: Container, reason?: string) {
   const dir = jobDir(cfg, c.repo, c.issue);
@@ -489,6 +499,10 @@ async function finish(cfg: Config, c: Container, reason?: string) {
   };
   let problem = reason ?? null;
   let buildOk = false;
+  // Vor der Bewertung prüfen, ob der Lauf am Guthaben gescheitert ist. Das ist kein Fehler im
+  // Auftrag, sondern ein Zustand, der den ganzen Betrieb betrifft.
+  const jobText = (readJobFile(join(dir, "agent.jsonl"), 250_000) ?? "") + (readJobFile(join(dir, "agent.err"), 5_000) ?? "");
+  const outOfCredit = creditProblem(jobText);
   if (!problem && !(status.status && endStates[c.phase].includes(status.status))) {
     // Der Agent hat am Ende nicht gemeldet. Das allein heißt noch nichts: Gute Arbeit darf nicht
     // weggeworfen werden, nur weil der letzte Aufruf fehlt. Maßstab ist derselbe wie bei einer
@@ -513,6 +527,11 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     problem = `${was} wurde mit einem Fehler beendet (Exit-Code ${c.exitCode}).`;
   }
   if (!problem && !buildOk && c.phase === "build" && status.status === "accepting") problem = await checkBuild(c.repo, c.issue, dir, status.pr);
+  if (outOfCredit) {
+    budgetHaltUntil = Date.now() + 60 * 60 * 1000;
+    problem = "Guthaben beim Modellanbieter aufgebraucht (402). Die Fabrik hält an, bis das Guthaben aufgefüllt ist — sie startet von selbst keinen neuen Lauf. Nach dem Auffüllen im Issue kommentieren, das hebt die Sperre auf.";
+    log("budget:halt", { repo: c.repo, issue: c.issue, until: new Date(budgetHaltUntil).toISOString() });
+  }
   const ended = !problem;
   const metricStatus = ended ? (status.status === "review" && status.unresolved ? "unresolved" : status.status) : "failed";
 
@@ -819,6 +838,12 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
     let lost = false;
     const marker = lastFactoryMarker(issue);
     const answered = humanCommentsSinceFactory(cfg, issue).length > 0;
+    // Ein Kommentar eines Menschen hebt die Guthaben-Sperre auf — das ist die Bestätigung
+    // "nachgefüllt, bitte weiter".
+    if (answered && Date.now() < budgetHaltUntil) {
+      budgetHaltUntil = 0;
+      log("budget:resumed", { repo, issue: issue.number });
+    }
     if (current === "new") phase = "check";
     else if (current === "checking") { phase = "check"; mode = "retry"; lost = true; }          // Prüf-Job verloren
     else if (current === "approved") phase = "build";
@@ -843,6 +868,12 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
     const waiting = await openBlockers(repo, issue.number);
     if (waiting.length) {
       log("issue:blocked", { repo, issue: issue.number, blockedBy: waiting });
+      continue;
+    }
+
+    // Guthaben aufgebraucht: keine neuen Läufe starten. Sie würden alle an derselben 402 hängen.
+    if (Date.now() < budgetHaltUntil) {
+      log("budget:halted", { repo, issue: issue.number, until: new Date(budgetHaltUntil).toISOString() });
       continue;
     }
 

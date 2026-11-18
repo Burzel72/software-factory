@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPrompt, caddyConfig, humanCommentsSinceFactory, lastFactoryMarker, readJobFile, redact,
+  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, lastFactoryMarker, readJobFile, redact,
   reworksSinceApproval, setFactoryLogin, writeJobFile, type Config,
 } from "./main.ts";
 
@@ -226,4 +226,17 @@ test("Fehlerkommentar enthält keine Server-Dateien und keine Tokens", async () 
     startedAt: "2026-11-11T10:00:00Z", finishedAt: "2026-11-11T10:05:00Z", exitCode: 1 });
   const posted = calls.map((x) => x.stdin).join("\n");
   assert.ok(!posted.includes("GEHEIM"));
+});
+
+test("Guthaben-Fehler des Anbieters wird erkannt", () => {
+  // So sieht es aus, wenn OpenRouter das Guthaben ablehnt (Auszug aus einem echten Lauf).
+  const echt = '{"code":402,"metadata":{"reason":"in_flight_budget_exhausted",' +
+    '"message":"This request requires more credits or fewer max_tokens."}}';
+  assert.equal(creditProblem(echt), true);
+  assert.equal(creditProblem('{"error":{"code":402,"message":"insufficient_credits"}}'), true);
+  // Ein normaler Fehlschlag darf die Fabrik NICHT anhalten.
+  assert.equal(creditProblem("SyntaxError: unexpected token"), false);
+  assert.equal(creditProblem(""), false);
+  // Eine Zahl 402 im Text ohne Guthaben-Bezug reicht nicht.
+  assert.equal(creditProblem("Zeile 402 der Datei ist leer"), false);
 });

@@ -354,13 +354,13 @@ test("jobBurn erkennt gleichartige Aufrufe mit wechselnden Parametern", () => {
 test("Vermittelte Freigabe: Mika darf nur mit Entscheider und Quelle", () => {
   setFactoryLogin("elison-fac");
   const konf = cfg({ allowedUsers: ["Burzel72"], proxyUsers: ["mika-fac"] });
-  const gueltig = c("mika-fac", "Budget: neu\nEntschieden von: @Burzel72\nQuelle: Telegram 2026-11-18T16:42");
+  const gueltig = c("mika-fac", "Freigabe: vermittelt\nBudget: neu\nEntschieden von: @Burzel72\nQuelle: Telegram 2026-11-18T16:42");
   assert.equal(proxyApproval(konf, [gueltig])?.decidedBy, "Burzel72");
 
   // Ohne Quelle: ungültig (Herkunft muss nachvollziehbar sein).
-  assert.equal(proxyApproval(konf, [c("mika-fac", "Budget: neu\nEntschieden von: @Burzel72")]), null);
+  assert.equal(proxyApproval(konf, [c("mika-fac", "Freigabe: vermittelt\nBudget: neu\nEntschieden von: @Burzel72")]), null);
   // Entscheider ist kein bekannter Mensch.
-  assert.equal(proxyApproval(konf, [c("mika-fac", "Budget: neu\nEntschieden von: @Fremd\nQuelle: Telegram")]), null);
+  assert.equal(proxyApproval(konf, [c("mika-fac", "Freigabe: vermittelt\nBudget: neu\nEntschieden von: @Fremd\nQuelle: Telegram")]), null);
   // Ohne "Freigabe: vermittelt" — ein normaler Kommentar von Mika zählt nicht.
   assert.equal(proxyApproval(konf, [c("mika-fac", "Entschieden von: @Burzel72\nQuelle: Telegram")]), null);
   // Mika ist nicht als Vermittler eingetragen.

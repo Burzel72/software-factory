@@ -77,8 +77,13 @@ test("Antworten zählen nur von berechtigten Personen", () => {
   const i = issue([c("alex", "<!-- software-factory:question:check -->\nFrage?"), c("fremd", "Mach Option B")]);
   assert.equal(humanCommentsSinceFactory(cfg(), i).length, 0);
   assert.equal(humanCommentsSinceFactory(cfg({ allowedUsers: ["Fremd"] }), i).length, 1);
+  // Ein Kommentar der Fabrik-Identität ohne Marker ist KEIN Mensch — sonst könnte der Agent
+  // sich selbst neu starten ("Option A" wäre als Antwort gezählt worden).
   const own = issue([c("alex", "<!-- software-factory:question:check -->\nFrage?"), c("alex", "Option A")]);
-  assert.equal(humanCommentsSinceFactory(cfg(), own).length, 1);
+  assert.equal(humanCommentsSinceFactory(cfg(), own).length, 0);
+  // Ein echter Mensch (in allowedUsers) zählt weiterhin.
+  const mensch = issue([c("alex", "<!-- software-factory:question:check -->\nFrage?"), c("burzel", "Option A")]);
+  assert.equal(humanCommentsSinceFactory(cfg({ allowedUsers: ["burzel"] }), mensch).length, 1);
 });
 
 test("Gefälschte Marker setzen den Rückgabe-Zähler nicht zurück", () => {

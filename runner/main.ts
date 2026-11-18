@@ -675,7 +675,11 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
     if (!zaehlt) continue;
     sigs.push(`${m[1]}|${m[2]}`);
     const istSkript = m[2].includes("<<") || m[2].includes("EOF");
-    if (!istSkript) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
+    // Interpreter-Einzeiler (`python3 -c …`, `node -e …`) beginnen immer gleich und werden
+    // beim Arbeiten legitim dutzendfach aufgerufen. Für die *Ähnlichkeit* zählen sie nicht;
+    // eine echte Wiederholung desselben Befehls erkennt die exakte Prüfung weiterhin.
+    const istEinzeiler = /^(python3?|node|bun|ruby|perl)\s+(-c|-e)\b/.test(m[2]);
+    if (!istSkript && !istEinzeiler) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
   }
   const recent = sigs.slice(-WINDOW);
   const recentGrob = grob.slice(-WINDOW);

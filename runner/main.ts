@@ -1184,6 +1184,24 @@ async function tick(cfg: Config) {
       const pl = (cfg.phaseLimits ?? {})[c.phase] ?? {};
       const timeLimit = pl.minutes ?? cfg.jobTimeoutMinutes;
 
+      // Hat der Lauf sein Ergebnis schon gemeldet, ist er fertig — auch wenn der Agent danach
+      // weiterredet oder die Sitzung zu beenden versucht (beobachtet: Endlosschleife aus
+      // 'finish'-Aufrufen NACH erfolgreicher Meldung). Diese Prüfung steht bewusst VOR den
+      // Bremsen: Eine abgeschlossene Arbeit darf nicht als Schleife verworfen werden.
+      const gemeldet = String(readJobJson(join(dir, "status.json"))?.status ?? "");
+      const terminal = c.phase === "build" ? ["accepting", "question", "failed"]
+        : c.phase === "accept" ? ["review", "working", "question", "failed"]
+          : ["approved", "question", "rejected", "failed"];
+      if (terminal.includes(gemeldet)) {
+        const seitMeldung = (Date.now() - statSync(join(dir, "status.json")).mtimeMs) / 60000;
+        if (seitMeldung > 1) {
+          log("job:selfreport-exit", { repo: c.repo, issue: c.issue, status: gemeldet, seitMeldung: Math.round(seitMeldung) });
+          await docker(["kill", c.name]).catch(() => {});
+          await finish(cfg, { ...c, running: false, exitCode: 0, finishedAt: new Date().toISOString() });
+          continue;
+        }
+      }
+
       // Kosten- und Schrittbremse: Zeitlimit und Stillstand erkennen eine Schleife nicht, wenn
       // sie ständig Ausgabe produziert. Gemessen: 2591 Schritte in einem Lauf = 18 $ verbrannt.
       const burn = jobBurn(dir);

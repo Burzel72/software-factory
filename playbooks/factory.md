@@ -96,6 +96,9 @@ Danach beendest du die Arbeit.
    **Pflichtprüfungen sind unantastbar** — `factory-verify` erzwingt das: Streicht dein Branch einen Befehl, der auf `main` in `checks` steht, endet die Prüfung mit Exit 3. `.factory/setup.json` → `checks` liest du, du änderst sie nicht. Ein Check, der in dieser Umgebung nicht laufen kann (z. B. `docker build` ohne Docker im Container), wird **gemeldet**, nicht gestrichen. Ebenso bleibt die Form `{"name": "befehl"}` bestehen — eine Umwandlung in eine Liste oder ein Objekt ohne Befehle gilt als Manipulation der Prüfung.
 
    **Vor dem Review muss der Branch `main` enthalten.** `git fetch origin && git merge origin/main`; Konflikte so auflösen, dass **beide Seiten erhalten bleiben**. `factory-verify` meldet `upToDate: false`, wenn das fehlt, und der Runner lehnt den Bau dann ab.
+
+   **Nach `factory-report` ist der Lauf beendet.** Setze die Meldung als **letzten** Schritt ab und rufe danach **kein Werkzeug mehr** auf — kein `echo`, kein `git`, kein Versuch die Sitzung zu beenden. Es gibt kein Werkzeug namens `finish`; wer es aufruft, bekommt einen Fehler und wiederholt ihn erfahrungsgemäß endlos. Der Runner erkennt die Meldung selbst und beendet den Container. Wenn du das Gefühl hast, noch etwas sagen zu müssen: in den Text der Meldung.
+
 4. **Pull Request** gegen den Standard-Branch: `gh pr create --base "$FACTORY_DEFAULT_BRANCH" --head <branch> --title "<Typ>(#<nummer>): <Titel>" --body-file <datei>`
    Der PR-Text enthält in dieser Reihenfolge:
    1. `Closes #<nummer>`

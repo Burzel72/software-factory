@@ -21,10 +21,13 @@ die wichtigste Lehre: **Aktivität ist kein Fortschritt.**
 | Bremse | Wert | Fängt ab |
 |---|---|---|
 | Zeitlimit | 90 Min | Läufe, die hängen, ohne Ausgabe zu erzeugen |
-| Stillstand | 30 Min ohne Datei-Aktivität | Prozesse, die auf etwas warten, das nie kommt |
+| Stillstand | 15 Min ohne Datei-Aktivität | Prozesse, die auf etwas warten, das nie kommt |
 | **Kosten** | **2 $** | Teure Schleifen — unabhängig davon, wie beschäftigt sie aussehen |
-| **Schritte** | **300** | Viele billige Schritte ohne Ergebnis (billige Modelle dürfen viel, aber nicht endlos) |
+| **Kosten (zweite Messung)** | **2 $** laut Anbieter | Formatänderung im Agenten-Protokoll macht die erste Messung blind |
+| **Schritte** | check **40**, build **250**, accept **100** | Gemessen an eigenen Läufen: Median 10 / 47 / 38, höchster echter Lauf 17 / 157 / 53. Fremde Vorgaben (25) würden jeden erfolgreichen Build abwürgen |
+| **Fehlerkaskade** | **5 fehlgeschlagene Aufrufe** in Folge | Derselbe Fehler mit leicht anderen Argumenten — sieht keine Wiederholungserkennung |
 | **Schleife** | **10 gleiche Aufrufe** in den letzten 40 | Der 2591-Schritte-Fall: derselbe Aufruf immer wieder |
+| **Zeit** | check **15**, build **90**, accept **45** Min | Ein Prüflauf braucht keine 90 Minuten |
 
 Die drei letzten sind redundant zueinander — mit Absicht. Die Schleifenerkennung greift nach
 etwa einer Minute, die Kostenbremse nach zwei Dollar, die Schrittbremse bei billigen Modellen
@@ -35,14 +38,16 @@ später. Wer zuerst anschlägt, gewinnt.
 | Bremse | Wert | Fängt ab |
 |---|---|---|
 | Nachbesserungsrunden | 2 | Bau und Abnahme schieben sich endlos Fehler zu |
-| Kosten je Auftrag | 6 $ | Ein Auftrag, der über viele Runden das Budget frisst |
+| Kosten je Auftrag | 4 $ | Ein Auftrag, der über viele Runden das Budget frisst |
+| Läufe je Auftrag | 8 | „Kommentar → gleicher Fehlschlag → Kommentar" als Endlosschleife |
 | Abhängigkeiten (`blocked by`) | — | Zwei Aufträge, die dieselbe Datei umbauen |
 
 ### Ebene 3 — Tag und Betrieb
 
 | Bremse | Wert | Fängt ab |
 |---|---|---|
-| Tagesgrenze je Projekt | 5 $ | Drei Schleifen an einem Tag wären dreistellig |
+| Tagesgrenze je Projekt | 8 $ | Drei Schleifen an einem Tag wären dreistellig |
+| Tagesgrenze gesamt | 12 $ | Viele Projekte × viele kleine Aufträge summieren sich |
 | Guthaben-Fehler (402) | Sperre 1 Std | Weiterlaufen, obwohl kein Geld mehr da ist |
 | Gleichzeitige Läufe | 1 | Konkurrierende Umbauten, Speicherdruck |
 

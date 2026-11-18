@@ -45,6 +45,16 @@ Ziel: eine klare Entscheidung in wenigen Minuten. **Kein Code, keine Commits, ke
   - Gibt es Widersprüche in der Spec oder zum bestehenden Code, zu anderen Features, zur PRD?
   - Passt es zum Stack in `docs/stack.md`, oder bräuchte es neue Dienste (Datenbank, Login, Bezahlung …), die dort nicht vorgesehen sind?
   - Fehlen Voraussetzungen (ein Feature, das die Spec braucht, ist noch nicht gebaut)?
+- **Umfang prüfen — hier ist Zurückweisen Pflicht, nicht Freundlichkeit:**
+  - Mehr als **5 Akzeptanzkriterien** oder mehr als **2 Dateien/Teilsysteme** (z. B. Daten erheben
+    *und* Oberfläche *und* Vollbild) → `question` mit einem Vorschlag, wie der Auftrag in kleinere
+    Issues geteilt wird. Ein zu großer Auftrag wird oberflächlich umgesetzt und kostet drei
+    Runden statt einer — gemessen: von 11 Abnahmen bestanden 2.
+  - Kriterien ohne **messbare** Angabe („sieht gut aus", „sollte funktionieren", „benutzerfreundlich")
+    → `question` mit der Bitte um Zahlen (Breiten in px, Werte, erlaubte Fehlerfälle).
+  - Fehlt ein Abschnitt „Was alles kaputtgehen kann" (Randfälle), fordere ihn an: leere Liste,
+    fehlende/kaputte Daten, genau ein Element, sehr lange Texte, letztes Element der Liste.
+    Alle vier Fehlschläge der letzten Woche waren Randfälle, keine Grundfunktionen.
 - Entscheidung:
   - **Klein und eindeutig klärbar** (ein Kriterium unklar, eine Entscheidung fehlt) → `question`
   - **Grundlegend nicht baubar**, die Spec muss überarbeitet werden (widersprüchlich, nicht testbar, außerhalb des Stacks, Voraussetzung fehlt) → `rejected` mit Grund und dem, was der Mensch ändern muss
@@ -68,7 +78,17 @@ Danach beendest du die Arbeit.
 2. **Umsetzung:** `factory-report implementing "..."`
    - Feature: Skill `build`. Bug: Fix. Commit-Reihenfolge beim Bug: erst der rote Test, dann der Fix.
    - Kleine, sinnvolle Commits, immer mit der **Issue-Nummer**: `feat(#12): ...`, `fix(#12): ...`. Es gibt keine zweite Nummernwelt (keine Projekt-IDs) — Issue und Pull Request sind die einzigen Nummern.
-3. **Tests:** `factory-report verifying "..."`
+3. **Selbstprüfung (Pflicht bei sichtbaren Änderungen):** Bevor du `built` meldest, prüfst du deine
+   eigene Arbeit so, wie die Abnahme sie prüfen wird. Chromium und Playwright sind im Container
+   installiert — dieselben Werkzeuge, die der Prüfer benutzt.
+   - Starte die App (`.factory/setup.json` → `dev`) und gehe **jedes Akzeptanzkriterium** aus der
+     Spec durch: ein Playwright-Skript, das klickt und **misst** (Zahlen auslesen, nicht hinsehen).
+   - Prüfe zusätzlich die Randfälle, die in der Spec unter „Was alles kaputtgehen kann" stehen.
+   - Was du nicht selbst prüfen kannst, ist **kein** ✅: Melde `factory-report question "<was du
+     nicht prüfen kannst und warum>"` statt zu raten.
+   - Ein Kriterium, das du nur „im Code" erfüllt hast, ohne es ausgeführt zu haben, gilt als offen.
+
+4. **Tests:** `factory-report verifying "..."`
    - Skill `qa` → `qa-report.md` im Feature-Ordner (beim Bug: Ergebnis in den PR).
    - Bei sichtbaren Änderungen: Dev-Server starten (`.factory/setup.json` → `dev`), Screenshots mit `factory-screenshot`.
    - Committen, pushen, dann `factory-verify`. Schlägt etwas fehl: zurück zur Umsetzung (maximal drei Runden). Bleibt es rot: `factory-report failed "<was nicht grün wird und warum>"`.
@@ -81,7 +101,10 @@ Danach beendest du die Arbeit.
    1. `Closes #<nummer>`
    2. **Spec:** Link zur `spec.md` (bei Features)
    3. **Was umgesetzt wurde** (2–4 Sätze, verständlich ohne Code-Kenntnisse)
-   4. **Akzeptanzkriterien** aus der Spec, jedes mit Ergebnis (✅ / ❌)
+   4. **Akzeptanzkriterien** aus der Spec als **Tabelle** — je Kriterium eine Zeile:
+      | Kriterium | Was ich getan habe | **Womit nachgewiesen** (Messwert, Befehl, Screenshot) |
+      Ein ✅ ohne Nachweis in der dritten Spalte ist ungültig. Konntest du ein Kriterium nicht
+      prüfen, steht dort ❓ mit Begründung — und du meldest `question` statt `built`.
    5. **Annahmen, die ich getroffen habe** (eine pro Zeile, oder „keine")
    6. **Checks** (Inhalt aus `/work/verify.md`)
    7. **Screenshots** (Ausgabe von `factory-screenshot`), falls es sichtbare Änderungen gibt

@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact, spent,
+  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact, runsToday, spent,
   reworksSinceApproval, setFactoryLogin, writeJobFile, type Config,
 } from "./main.ts";
 
@@ -289,4 +289,26 @@ test("spent summiert nur heute und nur das gewünschte Projekt", () => {
   assert.ok(Math.abs(spent(cfg, "a/b") - 0.75) < 1e-9);
   assert.ok(Math.abs(spent(cfg, "a/b", 1) - 0.5) < 1e-9);
   assert.equal(spent(cfg, "c/d"), 0);
+});
+
+test("errorStreak zählt aufeinanderfolgende Fehlschläge", () => {
+  const dir = mkdtempSync(join(tmpdir(), "streak-"));
+  const auf = (tool: string, status: string) => JSON.stringify({ type: "tool_use", part: { tool, state: { status, input: { command: tool + "-befehl" } } } });
+  // Zwei Fehlschläge, dann Erfolg, dann vier Fehlschläge → Streak ist 4.
+  writeFileSync(join(dir, "agent.jsonl"), [auf("a", "error"), auf("b", "error"), auf("c", "completed"), auf("d", "error"), auf("e", "error"), auf("f", "error"), auf("g", "error")].join("\n"));
+  assert.equal(jobBurn(dir).errorStreak, 4);
+});
+
+test("runsToday und spent(*) zählen projektübergreifend", () => {
+  const dir = mkdtempSync(join(tmpdir(), "runs-"));
+  const heute = new Date().toISOString().slice(0, 10);
+  writeFileSync(join(dir, "metrics.jsonl"), [
+    { t: `${heute}T08:00:00Z`, repo: "a/b", issue: 7, costUsd: 0.2 },
+    { t: `${heute}T09:00:00Z`, repo: "a/b", issue: 7, costUsd: 0.3 },
+    { t: `${heute}T10:00:00Z`, repo: "c/d", issue: 1, costUsd: 1.0 },
+    { t: "2020-01-01T10:00:00Z", repo: "a/b", issue: 7, costUsd: 50 },
+  ].map((z) => JSON.stringify(z)).join("\n"));
+  const cfg = { dataDir: dir } as Config;
+  assert.equal(runsToday(cfg, "a/b", 7), 2);
+  assert.ok(Math.abs(spent(cfg, "*") - 1.5) < 1e-9);
 });

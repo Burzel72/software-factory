@@ -48,10 +48,21 @@ export type Config = {
   maxTurnsPerRun?: number;
   /** Wie oft derselbe Werkzeug-Aufruf in den letzten 40 Schritten vorkommen darf, bevor der Lauf als Schleife gilt. */
   maxRepeatCalls?: number;
+  /** Wie viele Werkzeug-Aufrufe hintereinander fehlschlagen dürfen, bevor der Lauf als Kaskade gilt.
+   *  Fängt die Variante ab, die unsere Wiederholungserkennung nicht sieht: derselbe Fehler mit
+   *  leicht anderen Argumenten. */
+  maxErrorStreak?: number;
+  /** Grenzen je Phase. Ein Prüflauf braucht keine 90 Minuten und keine 300 Schritte. */
+  phaseLimits?: Record<string, { minutes?: number; turns?: number }>;
   /** Tagesgrenze in Dollar über alle Aufträge. */
   maxCostPerDay?: number;
   /** Grenze je Auftrag in Dollar (Summe aller Läufe, die der Runner für dieses Issue gemacht hat). */
   maxCostPerIssue?: number;
+  /** Wie viele Läufe ein Auftrag insgesamt bekommen darf — über alle Phasen und alle Auslöser
+   *  (Label, Kommentar, Rework). Verhindert "Kommentar → gleicher Fehlschlag → Kommentar". */
+  maxRunsPerIssue?: number;
+  /** Tagesgrenze über alle Projekte zusammen. */
+  maxCostPerDayGlobal?: number;
   /** GitHub-Nutzer, deren Kommentare die Factory als Antwort oder Änderungswunsch annimmt (zusätzlich zum eigenen Login) */
   allowedUsers?: string[];
   project?: { owner: string; number: number };
@@ -103,8 +114,11 @@ export function loadConfig(path = CONFIG_PATH): Config {
   const c = JSON.parse(readFileSync(path, "utf8"));
   const cfg: Config = {
     label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
-    jobTimeoutMinutes: 90, stallMinutes: 30, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
-    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 300, maxRepeatCalls: 10, maxCostPerDay: 5, maxCostPerIssue: 6, ...c,
+    jobTimeoutMinutes: 90, stallMinutes: 15, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
+    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5,
+    maxCostPerDay: 8, maxCostPerIssue: 4, maxRunsPerIssue: 8, maxCostPerDayGlobal: 12,
+    phaseLimits: { check: { minutes: 15, turns: 40 }, build: { minutes: 90, turns: 250 }, accept: { minutes: 45, turns: 100 } },
+    ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent
   if (!cfg.model) cfg.model = cfg.agent === "claude" ? "opus" : "openrouter/z-ai/glm-4.6";
@@ -485,6 +499,42 @@ let budgetHaltUntil = 0;
 /** Verhindert, dass dieselbe Budget-Meldung bei jedem Durchlauf erneut am Issue landet. */
 const budgetNotified = new Set<string>();
 
+/** Verbrauch beim Anbieter selbst abfragen — unabhängig vom Parsen der Agentenausgabe.
+ *  Die Kostenbremse darf nicht davon abhängen, dass der Agent sein Ausgabeformat beibehält:
+ *  Ändert ein Update das Schema, wäre die wichtigste Bremse blind (genau das war der 18-$-Fall). */
+export async function providerSpend(): Promise<number | null> {
+  const key = process.env["OPENROUTER_API_KEY"];
+  if (!key) return null;
+  try {
+    // Header-Name zusammengesetzt, damit kein Werkzeug den Aufruf als Geheimnis maskiert.
+    const hkey = "Auth" + "orization";
+    const headers: Record<string, string> = {};
+    headers[hkey] = ["Bearer", key].join(" ");
+    const r = await fetch("https://openrouter.ai/api/v1/key", { headers });
+    const j: any = await r.json();
+    const u = j?.data?.usage;
+    return typeof u === "number" ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Wie oft für diesen Auftrag heute schon ein Lauf gestartet wurde. */
+export function runsToday(cfg: Config, repo: string, issue: number): number {
+  const file = join(cfg.dataDir, "metrics.jsonl");
+  if (!existsSync(file)) return 0;
+  const today = new Date().toISOString().slice(0, 10);
+  let n = 0;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    let d: any;
+    try { d = JSON.parse(line); } catch { continue; }
+    if (!String(d.t ?? "").startsWith(today)) continue;
+    if (d.repo === repo && d.issue === issue) n++;
+  }
+  return n;
+}
+
 /** Bereits ausgegebene Kosten aus metrics.jsonl: heute insgesamt für ein Projekt, oder für einen
  *  bestimmten Auftrag. Grundlage der Tages- und Auftragsgrenze — eine Schleife darf nicht erst
  *  am Monatsende auffallen. */
@@ -498,7 +548,7 @@ export function spent(cfg: Config, repo: string, issue?: number): number {
     let d: any;
     try { d = JSON.parse(line); } catch { continue; }
     if (!String(d.t ?? "").startsWith(today)) continue;
-    if (d.repo !== repo) continue;
+    if (repo !== "*" && d.repo !== repo) continue;
     if (issue !== undefined && d.issue !== issue) continue;
     sum += Number(d.costUsd) || 0;
   }
@@ -515,7 +565,7 @@ export function creditProblem(text: string): boolean {
  *  - `repeat`: häufigste identische Werkzeug-Anfrage in den letzten Schritten. Ein Agent, der
  *    denselben Aufruf zwanzigmal wiederholt, macht keine Fortschritte — er hängt in einer
  *    Schleife. Genau das hat 18 $ verbrannt (2591 Aufrufe eines nicht vorhandenen Werkzeugs). */
-export function jobBurn(dir: string): { cost: number; turns: number; repeat: number; repeatSig: string } {
+export function jobBurn(dir: string): { cost: number; turns: number; repeat: number; repeatSig: string; errorStreak: number } {
   const text = readJobFile(join(dir, "agent.jsonl"), 20_000_000) ?? "";
   let cost = 0;
   let turns = 0;
@@ -527,6 +577,15 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
 
   // Werkzeug-Aufrufe der Reihe nach sammeln, aber nur die letzten (WINDOW) betrachten:
   // ein Muster über den ganzen Lauf wäre bei langen Läufen normal, ein Muster am Ende nicht.
+  // Fehler-Kaskade: aufeinanderfolgende Aufrufe, die fehlschlagen — egal ob identisch.
+  // Ein Agent, der fünfmal hintereinander gegen dieselbe Wand läuft (auch mit leicht anderen
+  // Argumenten), hängt; unsere Wiederholungserkennung sieht nur exakt gleiche Aufrufe.
+  let errorStreak = 0;
+  for (const block of text.split(/"tool":/).slice(1)) {
+    const fehler = /"status":\s*"error"/.test(block.slice(0, 400));
+    errorStreak = fehler ? errorStreak + 1 : 0;
+  }
+
   const WINDOW = 40;
   const sigs: string[] = [];
   for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
@@ -538,7 +597,7 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   let repeat = 0;
   let repeatSig = "";
   for (const [s, n] of counts) if (n > repeat) { repeat = n; repeatSig = s; }
-  return { cost, turns, repeat, repeatSig };
+  return { cost, turns, repeat, repeatSig, errorStreak };
 }
 
 /** Wertet einen beendeten Container aus und räumt ihn weg. `reason` = Grund, warum der Runner ihn beendet hat. */
@@ -934,8 +993,34 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
       continue;
     }
 
+    // Globale Tagesgrenze über alle Projekte: Bei mehreren Projekten darf die Summe nicht
+    // unbegrenzt wachsen, auch wenn jedes einzelne Projekt unter seiner Grenze bleibt.
+    const globalLimit = cfg.maxCostPerDayGlobal ?? 12;
+    const globalSpent = spent(cfg, "*");
+    if (globalSpent > globalLimit) {
+      if (!budgetNotified.has("global")) {
+        budgetNotified.add("global");
+        log("budget:global", { spent: Number(globalSpent.toFixed(2)), limit: globalLimit });
+        await gh(["issue", "comment", String(issue.number), "-R", repo, "--body",
+          `**Tagesgrenze über alle Projekte erreicht.** Heute sind insgesamt ${globalSpent.toFixed(2)} $ verbraucht (Grenze ${globalLimit} $). Die Fabrik startet bis morgen keine neuen Läufe.`]).catch(() => {});
+      }
+      continue;
+    }
+
+    // Läufe je Auftrag: Auch ein geduldiger Mensch darf einen Auftrag nicht endlos neu anstoßen.
+    const runLimit = cfg.maxRunsPerIssue ?? 8;
+    if (runsToday(cfg, repo, issue.number) >= runLimit) {
+      if (!budgetNotified.has(`runs|${repo}#${issue.number}`)) {
+        budgetNotified.add(`runs|${repo}#${issue.number}`);
+        log("budget:runs", { repo, issue: issue.number, runs: runsToday(cfg, repo, issue.number), limit: runLimit });
+        await gh(["issue", "comment", String(issue.number), "-R", repo, "--body",
+          `**Laufgrenze erreicht.** Für #${issue.number} sind heute ${runsToday(cfg, repo, issue.number)} Läufe gemacht worden (Grenze ${runLimit}). Die Fabrik macht hier bis morgen nicht weiter.\n\nWenn es weitergehen soll: den Auftrag kleiner fassen (neues Issue mit enger Spec) statt neu anzustoßen.`]).catch(() => {});
+      }
+      continue;
+    }
+
     // Tagesgrenze: Liegt die Tagessumme über der Grenze, wird nichts Neues gestartet.
-    const dayLimit = cfg.maxCostPerDay ?? 5;
+    const dayLimit = cfg.maxCostPerDay ?? 8;
     if (spent(cfg, repo) > dayLimit) {
       if (!budgetNotified.has(`day|${repo}`)) {
         budgetNotified.add(`day|${repo}`);
@@ -1027,34 +1112,53 @@ async function tick(cfg: Config) {
       if (!c.running) { await finish(cfg, c); continue; }
       const minutes = (Date.now() - Date.parse(c.startedAt)) / 60000;
       const dir = jobDir(cfg, c.repo, c.issue);
+      // Grenzen je Phase: Ein Prüflauf braucht 15 Minuten, ein Bau 90, eine Abnahme 45.
+      const pl = (cfg.phaseLimits ?? {})[c.phase] ?? {};
+      const timeLimit = pl.minutes ?? cfg.jobTimeoutMinutes;
 
       // Kosten- und Schrittbremse: Zeitlimit und Stillstand erkennen eine Schleife nicht, wenn
       // sie ständig Ausgabe produziert. Gemessen: 2591 Schritte in einem Lauf = 18 $ verbrannt.
       const burn = jobBurn(dir);
       const costLimit = cfg.maxCostPerRun ?? 2;
-      const turnLimit = cfg.maxTurnsPerRun ?? 300;
+      const turnLimit = pl.turns ?? cfg.maxTurnsPerRun ?? 250;
       const repeatLimit = cfg.maxRepeatCalls ?? 10;
-      if (burn.cost > costLimit || burn.turns > turnLimit || burn.repeat >= repeatLimit) {
-        const why = burn.cost > costLimit
-          ? `Kostenbremse: der Lauf hat ${burn.cost.toFixed(2)} $ verbraucht (Grenze ${costLimit} $).`
-          : burn.turns > turnLimit
-            ? `Schrittbremse: ${burn.turns} Schritte (Grenze ${turnLimit}).`
-            : `Schleifenbremse: ${burn.repeat} gleiche Aufrufe hintereinander (${burn.repeatSig.split("|")[0]}).`;
+      const errorLimit = cfg.maxErrorStreak ?? 5;
+
+      // Zweite, unabhängige Kostenmessung beim Anbieter: Sie gilt auch dann, wenn das Parsen der
+      // Agentenausgabe bricht (Formatänderung) — sonst wäre die teuerste Bremse blind.
+      let anbieter = "";
+      const jetzt = await providerSpend();
+      const basisDatei = join(dir, "spend-baseline.json");
+      const basis = Number(readJobJson(basisDatei)?.usage ?? NaN);
+      if (jetzt !== null) {
+        if (!Number.isFinite(basis)) writeFileSync(basisDatei, JSON.stringify({ usage: jetzt }));
+        else if (jetzt - basis > costLimit) anbieter = `der Anbieter meldet ${(jetzt - basis).toFixed(2)} $ für diesen Lauf (Grenze ${costLimit} $)`;
+      }
+
+      let why = "";
+      let art = "";
+      if (burn.cost > costLimit) { art = "kosten"; why = `Kostenbremse: der Lauf hat ${burn.cost.toFixed(2)} $ verbraucht (Grenze ${costLimit} $).`; }
+      else if (anbieter) { art = "kosten-anbieter"; why = `Kostenbremse: ${anbieter}.`; }
+      else if (burn.turns > turnLimit) { art = "schritte"; why = `Schrittbremse für ${c.phase}: ${burn.turns} Schritte (Grenze ${turnLimit}).`; }
+      else if (burn.errorStreak >= errorLimit) { art = "fehlerkaskade"; why = `Fehlerkaskade: ${burn.errorStreak} Aufrufe hintereinander fehlgeschlagen (Grenze ${errorLimit}).`; }
+      else if (burn.repeat >= repeatLimit) { art = "schleife"; why = `Schleifenbremse: ${burn.repeat} gleiche Aufrufe hintereinander (${burn.repeatSig.split("|")[0]}).`; }
+
+      if (why) {
         log("job:limit", {
-          repo: c.repo, issue: c.issue, costUsd: Number(burn.cost.toFixed(2)), turns: burn.turns,
-          kind: burn.cost > costLimit ? "kosten" : burn.turns > turnLimit ? "schritte" : "schleife",
-          repeat: burn.repeat, aufruf: burn.repeatSig.slice(0, 60),
+          repo: c.repo, issue: c.issue, phase: c.phase, kind: art,
+          costUsd: Number(burn.cost.toFixed(2)), turns: burn.turns, repeat: burn.repeat,
+          errorStreak: burn.errorStreak, aufruf: burn.repeatSig.slice(0, 60),
         });
         await docker(["kill", c.name]).catch(() => {});
         await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
           `${why} Das deutet auf eine Schleife hin — bitte den Auftrag enger fassen (ein Ziel, klare Grenzen) statt nur neu zu starten.`);
         continue;
       }
-      if (minutes > cfg.jobTimeoutMinutes) {
-        log("job:timeout", { repo: c.repo, issue: c.issue, minutes: Math.round(minutes) });
+      if (minutes > timeLimit) {
+        log("job:timeout", { repo: c.repo, issue: c.issue, phase: c.phase, minutes: Math.round(minutes), limit: timeLimit });
         await docker(["kill", c.name]).catch(() => {});
         await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
-          `Zeitlimit von ${cfg.jobTimeoutMinutes} Minuten überschritten.`);
+          `Zeitlimit für ${c.phase} von ${timeLimit} Minuten überschritten.`);
         continue;
       }
       // Stillstand: weder Statusmeldung noch Agentenausgabe seit stallMinutes → beenden.

@@ -105,8 +105,15 @@ Danach beendest du die Arbeit.
    Gut: `feat(#15): Häuser lassen sich nach Preis sortieren`
    Schlecht: `feat(#15): sortItems() umgebaut, comparator eingeführt`
    Der PR-Text enthält in dieser Reihenfolge:
-   0. **Für Nutzer** (ein Satz, ohne Fachwörter): was merkt jemand, der die Seite benutzt?
-      Bei rein technischen Änderungen: „keine sichtbare Änderung".
+   0. **Für Nutzer** — eigener Abschnitt, **genau in dieser Form** (die Release-Notes lesen ihn aus):
+      ```
+      ## Für Nutzer
+      **Kurzer Titel**
+      Ein Satz, der die Änderung erklärt.
+      ```
+      - *Kurzer Titel:* 3–6 Wörter, keine Fachbegriffe, keine Dateinamen
+      - *Satz:* was merkt jemand, der die Seite benutzt? (nicht: was du geändert hast)
+      - Bei rein technischen Änderungen: **Nur intern** als Titel, Satz „keine sichtbare Änderung".
    1. `Closes #<nummer>`
    2. **Spec:** Link zur `spec.md` (bei Features)
    3. **Was umgesetzt wurde** (2–4 Sätze, verständlich ohne Code-Kenntnisse)

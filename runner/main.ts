@@ -663,11 +663,12 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   // Zeile identisch ist. Genau so lief ein Lauf 276 Schritte lang im Kreis.
   const grob: string[] = [];
   for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
-    // Nur Befehle zählen: Bei `edit`/`write`/`read` ist die Signatur der Dateipfad — zehn
-    // Änderungen an derselben Datei sähen damit identisch aus und würden eine arbeitende
-    // Sitzung abräumen (beobachtet am 18.11.: Bau starb nach zehn Edits an einer Datei).
-    const istBefehl = m[1] === "shell" || m[1] === "bash";
-    if (!istBefehl) continue;
+    // Zählen nur Aufrufe, deren Signatur echten Inhalt trägt: Befehle und Meldungen.
+    // Bei `edit`/`write`/`read` ist die Signatur der Dateipfad — mehrfaches Bearbeiten
+    // derselben Datei sähe wie eine Schleife aus. `factory-verify` trägt keinen Inhalt und
+    // darf sich legitim wiederholen (nach jeder Korrektur erneut prüfen).
+    const zaehlt = ["shell", "bash", "factory-report", "factory-question"].includes(m[1]);
+    if (!zaehlt) continue;
     sigs.push(`${m[1]}|${m[2]}`);
     const istSkript = m[2].includes("<<") || m[2].includes("EOF");
     if (!istSkript) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);

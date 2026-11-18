@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, lastFactoryMarker, readJobFile, redact,
+  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact,
   reworksSinceApproval, setFactoryLogin, writeJobFile, type Config,
 } from "./main.ts";
 
@@ -239,4 +239,16 @@ test("Guthaben-Fehler des Anbieters wird erkannt", () => {
   assert.equal(creditProblem(""), false);
   // Eine Zahl 402 im Text ohne Guthaben-Bezug reicht nicht.
   assert.equal(creditProblem("Zeile 402 der Datei ist leer"), false);
+});
+
+test("jobBurn summiert Kosten und Schritte aus der Agentenausgabe", () => {
+  const dir = mkdtempSync(join(tmpdir(), "burn-"));
+  const ev = (cost: number) => JSON.stringify({ type: "step-finish", part: { cost, tokens: { input: 10, output: 2 } } });
+  writeFileSync(join(dir, "agent.jsonl"), [ev(0.5), ev(0.25), ev(0.0075)].join("\n"));
+  const b = jobBurn(dir);
+  assert.equal(b.turns, 3);
+  assert.ok(Math.abs(b.cost - 0.7575) < 1e-9, `cost war ${b.cost}`);
+  // Leerer Ordner darf nicht werfen.
+  const leer = mkdtempSync(join(tmpdir(), "burn-leer-"));
+  assert.deepEqual(jobBurn(leer), { cost: 0, turns: 0 });
 });

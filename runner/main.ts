@@ -42,6 +42,10 @@ export type Config = {
   containerMemory: string;
   /** Wie oft die Abnahme zurück in die Entwicklung geben darf. Danach entscheidet der Mensch. */
   maxReworks: number;
+  /** Kostenbremse je Lauf in Dollar. Eine Schleife kann sonst dreistellige Beträge verbrennen. */
+  maxCostPerRun?: number;
+  /** Schrittbremse je Lauf. Ergänzt die Kostenbremse, weil billige Modelle viele Schritte brauchen dürfen. */
+  maxTurnsPerRun?: number;
   /** GitHub-Nutzer, deren Kommentare die Factory als Antwort oder Änderungswunsch annimmt (zusätzlich zum eigenen Login) */
   allowedUsers?: string[];
   project?: { owner: string; number: number };
@@ -94,7 +98,7 @@ export function loadConfig(path = CONFIG_PATH): Config {
   const cfg: Config = {
     label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
     jobTimeoutMinutes: 90, stallMinutes: 30, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
-    containerMemory: "3g", maxReworks: 2, ...c,
+    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 300, ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent
   if (!cfg.model) cfg.model = cfg.agent === "claude" ? "opus" : "openrouter/z-ai/glm-4.6";
@@ -476,6 +480,21 @@ let budgetHaltUntil = 0;
 /** Steht in der Ausgabe des Laufs ein Guthaben-Fehler des Anbieters? */
 export function creditProblem(text: string): boolean {
   return /in_flight_budget_exhausted|requires more credits|insufficient_credits|"code"\s*:\s*402\b/i.test(text);
+}
+
+/** Verbrauch eines laufenden Auftrags aus der Agentenausgabe: Summe der Schrittkosten und
+ *  Anzahl der Schritte. Grundlage für die Notbremse — ein Lauf ohne Fortschritt, aber mit
+ *  tausenden Schritten, ist eine Schleife und kein Fortschritt. */
+export function jobBurn(dir: string): { cost: number; turns: number } {
+  const text = readJobFile(join(dir, "agent.jsonl"), 20_000_000) ?? "";
+  let cost = 0;
+  let turns = 0;
+  for (const m of text.matchAll(/"cost":\s*([0-9.eE+-]+)/g)) {
+    const v = Number(m[1]);
+    if (Number.isFinite(v)) cost += v;
+  }
+  for (const _ of text.matchAll(/"type":\s*"step-finish"/g)) turns++;
+  return { cost, turns };
 }
 
 /** Wertet einen beendeten Container aus und räumt ihn weg. `reason` = Grund, warum der Runner ihn beendet hat. */
@@ -939,6 +958,23 @@ async function tick(cfg: Config) {
     try {
       if (!c.running) { await finish(cfg, c); continue; }
       const minutes = (Date.now() - Date.parse(c.startedAt)) / 60000;
+      const dir = jobDir(cfg, c.repo, c.issue);
+
+      // Kosten- und Schrittbremse: Zeitlimit und Stillstand erkennen eine Schleife nicht, wenn
+      // sie ständig Ausgabe produziert. Gemessen: 2591 Schritte in einem Lauf = 18 $ verbrannt.
+      const burn = jobBurn(dir);
+      const costLimit = cfg.maxCostPerRun ?? 2;
+      const turnLimit = cfg.maxTurnsPerRun ?? 300;
+      if (burn.cost > costLimit || burn.turns > turnLimit) {
+        const why = burn.cost > costLimit
+          ? `Kostenbremse: der Lauf hat ${burn.cost.toFixed(2)} $ verbraucht (Grenze ${costLimit} $).`
+          : `Schrittbremse: ${burn.turns} Schritte (Grenze ${turnLimit}).`;
+        log("job:limit", { repo: c.repo, issue: c.issue, costUsd: Number(burn.cost.toFixed(2)), turns: burn.turns, kind: burn.cost > costLimit ? "kosten" : "schritte" });
+        await docker(["kill", c.name]).catch(() => {});
+        await finish(cfg, { ...c, running: false, exitCode: 137, finishedAt: new Date().toISOString() },
+          `${why} Das deutet auf eine Schleife hin — bitte den Auftrag enger fassen (ein Ziel, klare Grenzen) statt nur neu zu starten.`);
+        continue;
+      }
       if (minutes > cfg.jobTimeoutMinutes) {
         log("job:timeout", { repo: c.repo, issue: c.issue, minutes: Math.round(minutes) });
         await docker(["kill", c.name]).catch(() => {});
@@ -948,7 +984,6 @@ async function tick(cfg: Config) {
       }
       // Stillstand: weder Statusmeldung noch Agentenausgabe seit stallMinutes → beenden.
       const stall = cfg.stallMinutes ?? 30;
-      const dir = jobDir(cfg, c.repo, c.issue);
       const st = join(dir, "status.json");
       const activity = [st, join(dir, "agent.jsonl")]
         .filter((f) => existsSync(f))

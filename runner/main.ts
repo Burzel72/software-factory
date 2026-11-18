@@ -128,7 +128,7 @@ export function loadConfig(path = CONFIG_PATH): Config {
     jobTimeoutMinutes: 90, stallMinutes: 15, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
     containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5, maxSimilarCalls: 8,
     maxCostPerDay: 8, maxCostPerIssue: 4, maxRunsPerIssue: 8, maxCostPerDayGlobal: 12,
-    phaseLimits: { check: { minutes: 15, turns: 40 }, build: { minutes: 90, turns: 250 }, accept: { minutes: 45, turns: 100 } },
+    phaseLimits: { check: { minutes: 15, turns: 40 }, build: { minutes: 90, turns: 250 }, accept: { minutes: 45, turns: 160 } },
     ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent

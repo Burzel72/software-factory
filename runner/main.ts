@@ -464,7 +464,12 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
   const dir = jobDir(cfg, repo, issue.number);
   mkdirSync(dir, { recursive: true });
   chownSync(dir, CONTAINER_UID, CONTAINER_UID);
-  for (const f of ["status.json", "verify.json", "verify.md"]) rmSync(join(dir, f), { force: true });
+  // Alles wegräumen, was vom VORIGEN Lauf stammt. Sonst liest der neue Lauf das alte Ergebnis:
+  // Kosten und Schritte werden erneut gebucht (beobachtet: dieselbe 18-$-Zeile dreimal) und die
+  // Schleifenerkennung zählt die Aufrufe des Vorgängers mit.
+  for (const f of ["status.json", "verify.json", "verify.md", "result.json", "agent.jsonl", "agent.err", "claude.jsonl", "claude.err", "spend-baseline.json"]) {
+    rmSync(join(dir, f), { force: true });
+  }
   writeJobFile(join(dir, "prompt.md"), buildPrompt(cfg, repo, issue, phase, mode, prUrl, extra));
 
   if (phase === "check" && !issue.comments.some((c) => isFactoryComment(c) && c.body.includes(`${MARK}claimed`))) {

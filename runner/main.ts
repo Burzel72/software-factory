@@ -545,13 +545,13 @@ export function spent(cfg: Config, repo: string, issue?: number): number {
   // Ein Mensch kann die Zählung für einen Auftrag neu starten ("Budget: neu" im Kommentar) —
   // nötig, wenn ein Ausreißer (z. B. eine Schleife) die Grenze verbraucht hat, ohne dass
   // Arbeit entstanden ist. Sonst wäre die Grenze eine Strafe für einen Defekt.
+  // Schlüssel: "global" für alle Projekte, "<repo>" für ein Projekt, "<repo>#<issue>" für einen Auftrag.
+  const key = repo === "*" ? "global" : issue === undefined ? repo : `${repo}#${issue}`;
   let abStand: string | null = null;
-  if (issue !== undefined) {
-    try {
-      const resets = JSON.parse(readFileSync(join(cfg.dataDir, "budget-resets.json"), "utf8"));
-      abStand = resets[`${repo}#${issue}`] ?? null;
-    } catch { /* keine Resets */ }
-  }
+  try {
+    const resets = JSON.parse(readFileSync(join(cfg.dataDir, "budget-resets.json"), "utf8"));
+    abStand = resets[key] ?? null;
+  } catch { /* keine Resets */ }
   let sum = 0;
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
@@ -977,10 +977,17 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
       try {
         const f = join(cfg.dataDir, "budget-resets.json");
         const resets = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {};
-        resets[`${repo}#${issue.number}`] = new Date().toISOString();
+        const now = new Date().toISOString();
+        // Wer "Budget: neu" schreibt, meint den Auftrag — und nimmt bewusst auch die Projekt-
+        // und Tageszählung zurück, sonst bliebe die Sperre an derselben Zahl hängen.
+        resets[`${repo}#${issue.number}`] = now;
+        resets[repo] = now;
+        resets["global"] = now;
         writeFileSync(f, JSON.stringify(resets, null, 2));
         budgetNotified.delete(`issue|${repo}#${issue.number}`);
         budgetNotified.delete(`runs|${repo}#${issue.number}`);
+        budgetNotified.delete(`day|${repo}`);
+        budgetNotified.delete("global");
         log("budget:reset", { repo, issue: issue.number });
       } catch (e) { log("budget:reset-error", { repo, issue: issue.number, error: String(e) }); }
     }

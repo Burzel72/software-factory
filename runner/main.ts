@@ -547,6 +547,8 @@ let budgetHaltUntil = 0;
 const budgetNotified = new Set<string>();
 /** Verhindert, dass dieselbe Freigabe mehrfach eingetragen wird. */
 const resetsDone = new Set<string>();
+/** Container → Zeitpunkt, an dem wir seinen Endstand zuerst gesehen haben. */
+const terminalSeenAt = new Map<string, number>();
 
 /** Verbrauch beim Anbieter selbst abfragen — unabhängig vom Parsen der Agentenausgabe.
  *  Die Kostenbremse darf nicht davon abhängen, dass der Agent sein Ausgabeformat beibehält:
@@ -1293,9 +1295,16 @@ async function tick(cfg: Config) {
         : c.phase === "accept" ? ["review", "working", "question", "failed"]
           : ["approved", "question", "rejected", "failed"];
       if (terminal.includes(gemeldet)) {
-        const seitMeldung = (Date.now() - statSync(join(dir, "status.json")).mtimeMs) / 60000;
-        if (seitMeldung > 1) {
-          log("job:selfreport-exit", { repo: c.repo, issue: c.issue, status: gemeldet, seitMeldung: Math.round(seitMeldung) });
+        // Zeitpunkt des ERSTEN Sehens merken, nicht die Dateizeit messen: Der Agent schreibt
+        // status.json bei jedem erneuten `factory-report` neu — eine Messung an der Datei
+        // startet deshalb immer wieder von vorn und der Lauf wird nie beendet (beobachtet
+        // am 18.11.: Agent meldet erfolgreich und wiederholt das endlos).
+        const key2 = c.name;
+        const zuerst = terminalSeenAt.get(key2);
+        if (zuerst === undefined) terminalSeenAt.set(key2, Date.now());
+        else if (Date.now() - zuerst > 60_000) {
+          log("job:selfreport-exit", { repo: c.repo, issue: c.issue, status: gemeldet, sekunden: Math.round((Date.now() - zuerst) / 1000) });
+          terminalSeenAt.delete(key2);
           await docker(["kill", c.name]).catch(() => {});
           await finish(cfg, { ...c, running: false, exitCode: 0, finishedAt: new Date().toISOString() });
           continue;

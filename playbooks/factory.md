@@ -100,7 +100,13 @@ Danach beendest du die Arbeit.
    **Nach `factory-report` ist der Lauf beendet.** Setze die Meldung als **letzten** Schritt ab und rufe danach **kein Werkzeug mehr** auf — kein `echo`, kein `git`, kein Versuch die Sitzung zu beenden. Es gibt kein Werkzeug namens `finish`; wer es aufruft, bekommt einen Fehler und wiederholt ihn erfahrungsgemäß endlos. Der Runner erkennt die Meldung selbst und beendet den Container. Wenn du das Gefühl hast, noch etwas sagen zu müssen: in den Text der Meldung.
 
 4. **Pull Request** gegen den Standard-Branch: `gh pr create --base "$FACTORY_DEFAULT_BRANCH" --head <branch> --title "<Typ>(#<nummer>): <Titel>" --body-file <datei>`
+   **Der Titel ist für Menschen, nicht für Entwickler.** Er erscheint in den Release-Notes.
+   Schreibe, was sich für den Nutzer ändert — nicht, welche Funktion du angefasst hast.
+   Gut: `feat(#15): Häuser lassen sich nach Preis sortieren`
+   Schlecht: `feat(#15): sortItems() umgebaut, comparator eingeführt`
    Der PR-Text enthält in dieser Reihenfolge:
+   0. **Für Nutzer** (ein Satz, ohne Fachwörter): was merkt jemand, der die Seite benutzt?
+      Bei rein technischen Änderungen: „keine sichtbare Änderung".
    1. `Closes #<nummer>`
    2. **Spec:** Link zur `spec.md` (bei Features)
    3. **Was umgesetzt wurde** (2–4 Sätze, verständlich ohne Code-Kenntnisse)

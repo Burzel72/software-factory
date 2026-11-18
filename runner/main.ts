@@ -639,47 +639,69 @@ export function creditProblem(text: string): boolean {
  *  - `repeat`: häufigste identische Werkzeug-Anfrage in den letzten Schritten. Ein Agent, der
  *    denselben Aufruf zwanzigmal wiederholt, macht keine Fortschritte — er hängt in einer
  *    Schleife. Genau das hat 18 $ verbrannt (2591 Aufrufe eines nicht vorhandenen Werkzeugs). */
+/** Werkzeug-Aufrufe eines Laufs, aus dem Protokoll gelesen — als JSON, nicht per Textmuster.
+ *  Ein Textmuster zählt denselben Aufruf mehrfach, weil der Werkzeugname in der folgenden
+ *  Zeile erneut auftaucht: Am 18.11. meldete die Bremse 12 gleiche Aufrufe, wo tatsächlich
+ *  2 gleiche vorlagen — und räumte deshalb arbeitende Sitzungen ab. */
+function aufrufeAusProtokoll(dir: string): { tool: string; text: string; fehler: boolean }[] {
+  const roh = readJobFile(join(dir, "agent.jsonl"), 20_000_000) ?? "";
+  const gesehen = new Set<string>();
+  const liste: { tool: string; text: string; fehler: boolean }[] = [];
+  for (const zeile of roh.split("\n")) {
+    if (!zeile.startsWith("{")) continue;
+    let e: any;
+    try { e = JSON.parse(zeile); } catch { continue; }
+    if (e?.type !== "tool_use") continue;
+    const p = e.part ?? {};
+    const id = String(p.id ?? p.callID ?? "");
+    if (id) { if (gesehen.has(id)) continue; gesehen.add(id); }
+    const st = p.state ?? {};
+    const i = st.input ?? {};
+    liste.push({ tool: String(p.tool ?? ""), text: String(i.command ?? i.path ?? i.message ?? ""),
+                 fehler: String(st.status ?? "") === "error" });
+  }
+  return liste;
+}
+
 export function jobBurn(dir: string): { cost: number; turns: number; repeat: number; repeatSig: string; errorStreak: number; similar: number } {
   const text = readJobFile(join(dir, "agent.jsonl"), 20_000_000) ?? "";
+  const aufrufe = aufrufeAusProtokoll(dir);
+
+  // Kosten je Schritt: über die Ereignis-Kennung entdoppelt, sonst zählt ein wiederholtes
+  // Schritt-Ende denselben Betrag mehrfach und die Kostenbremse greift zu früh.
   let cost = 0;
   let turns = 0;
-  for (const m of text.matchAll(/"cost":\s*([0-9.eE+-]+)/g)) {
-    const v = Number(m[1]);
+  const kostenGesehen = new Set<string>();
+  for (const zeile of text.split("\n")) {
+    if (!zeile.startsWith("{") || !zeile.includes("step")) continue;
+    let e: any;
+    try { e = JSON.parse(zeile); } catch { continue; }
+    const art = String(e?.type ?? "");
+    if (art !== "step_finish" && art !== "step-finish") continue;
+    const id = String(e.part?.id ?? "");
+    if (id) { if (kostenGesehen.has(id)) continue; kostenGesehen.add(id); }
+    turns++;
+    const v = Number(e.part?.cost ?? 0);
     if (Number.isFinite(v)) cost += v;
   }
-  for (const _ of text.matchAll(/"type":\s*"step[-_]finish"/g)) turns++;
 
-  // Werkzeug-Aufrufe der Reihe nach sammeln, aber nur die letzten (WINDOW) betrachten:
-  // ein Muster über den ganzen Lauf wäre bei langen Läufen normal, ein Muster am Ende nicht.
   // Fehler-Kaskade: aufeinanderfolgende Aufrufe, die fehlschlagen — egal ob identisch.
-  // Ein Agent, der fünfmal hintereinander gegen dieselbe Wand läuft (auch mit leicht anderen
-  // Argumenten), hängt; unsere Wiederholungserkennung sieht nur exakt gleiche Aufrufe.
   let errorStreak = 0;
-  for (const block of text.split(/"tool":/).slice(1)) {
-    const fehler = /"status":\s*"error"/.test(block.slice(0, 400));
-    errorStreak = fehler ? errorStreak + 1 : 0;
-  }
+  for (const a of aufrufe) errorStreak = a.fehler ? errorStreak + 1 : 0;
 
   const WINDOW = 40;
   const sigs: string[] = [];
-  // Zweite Signatur: nur der Anfang des Befehls. Ein Agent, der zwanzigmal denselben Befehl mit
-  // anderem Suchmuster fährt ("grep '^+'", "grep '^-'", …), wiederholt sich — auch wenn keine
-  // Zeile identisch ist. Genau so lief ein Lauf 276 Schritte lang im Kreis.
   const grob: string[] = [];
-  for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
+  for (const a of aufrufe) {
     // Zählen nur Aufrufe, deren Signatur echten Inhalt trägt: Befehle und Meldungen.
     // Bei `edit`/`write`/`read` ist die Signatur der Dateipfad — mehrfaches Bearbeiten
     // derselben Datei sähe wie eine Schleife aus. `factory-verify` trägt keinen Inhalt und
     // darf sich legitim wiederholen (nach jeder Korrektur erneut prüfen).
-    const zaehlt = ["shell", "bash", "factory-report", "factory-question"].includes(m[1]);
-    if (!zaehlt) continue;
-    sigs.push(`${m[1]}|${m[2]}`);
-    const istSkript = m[2].includes("<<") || m[2].includes("EOF");
-    // Interpreter-Einzeiler (`python3 -c …`, `node -e …`) beginnen immer gleich und werden
-    // beim Arbeiten legitim dutzendfach aufgerufen. Für die *Ähnlichkeit* zählen sie nicht;
-    // eine echte Wiederholung desselben Befehls erkennt die exakte Prüfung weiterhin.
-    const istEinzeiler = /^(python3?|node|bun|ruby|perl)\s+(-c|-e)\b/.test(m[2]);
-    if (!istSkript && !istEinzeiler) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
+    if (!["shell", "bash", "factory-report", "factory-question"].includes(a.tool)) continue;
+    sigs.push(`${a.tool}|${a.text.slice(0, 200)}`);
+    const istSkript = a.text.includes("<<") || a.text.includes("EOF");
+    const istEinzeiler = /^(python3?|node|bun|ruby|perl)\s+(-c|-e)\b/.test(a.text);
+    if (!istSkript && !istEinzeiler) grob.push(`${a.tool}|${a.text.slice(0, 40)}`);
   }
   const recent = sigs.slice(-WINDOW);
   const recentGrob = grob.slice(-WINDOW);

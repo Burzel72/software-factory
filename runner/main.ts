@@ -126,9 +126,13 @@ export function loadConfig(path = CONFIG_PATH): Config {
   const cfg: Config = {
     label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
     jobTimeoutMinutes: 90, stallMinutes: 15, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
-    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5, maxSimilarCalls: 8,
+    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 1.5, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5, maxSimilarCalls: 8,
     maxCostPerDay: 8, maxCostPerIssue: 4, maxRunsPerIssue: 8, maxCostPerDayGlobal: 12,
-    phaseLimits: { check: { minutes: 15, turns: 40 }, build: { minutes: 90, turns: 250 }, accept: { minutes: 45, turns: 160 } },
+    // Grenzen aus den gemessenen Werten erfolgreicher Läufe (18.11.2026, metrics.jsonl), plus 50 % Luft.
+    // Grundlage: check "approved" n=23 (max 18 Schritte / 3,9 Min), build "accepting" n=25
+    // (max 157 / 16,4 Min), accept "review"+"unresolved" n=12 (max 67 / 12,2 Min).
+    // Die Abnahme braucht für größere Aufträge mehr als die gemessenen 67 Schritte — daher 130.
+    phaseLimits: { check: { minutes: 10, turns: 30 }, build: { minutes: 30, turns: 240 }, accept: { minutes: 20, turns: 130 } },
     ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent

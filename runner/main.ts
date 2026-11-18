@@ -661,12 +661,11 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   // Zeile identisch ist. Genau so lief ein Lauf 276 Schritte lang im Kreis.
   const grob: string[] = [];
   for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
-    sigs.push(`${m[1]}|${m[2]}`);
-    // Heredoc-Skripte (`python3 - <<'EOF'`) beginnen immer gleich und werden beim Debuggen
-    // legitim schrittweise verändert. Sie zählen deshalb nicht als „gleichartig" — sonst
-    // stirbt eine arbeitende Abnahme an dieser Regel.
+    // Dieselbe Datei mehrfach zu lesen ist beim Arbeiten normal (lesen, ändern, erneut lesen).
+    // Als Schleife zählt nur, was Wirkung hat: Befehle, Schreibvorgänge, Berichte.
+    if (m[1] !== "read") sigs.push(`${m[1]}|${m[2]}`);
     const istSkript = m[2].includes("<<") || m[2].includes("EOF");
-    if (!istSkript) grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
+    if (!istSkript && m[1] !== "read") grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
   }
   const recent = sigs.slice(-WINDOW);
   const recentGrob = grob.slice(-WINDOW);

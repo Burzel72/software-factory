@@ -336,3 +336,17 @@ test("Budget-Reset braucht einen Menschen, der sich selbst als Entscheider nennt
   const ok = budgetApproval(konf, [c("Burzel72", "Budget: neu\nEntschieden von: @Burzel72")]);
   assert.equal(ok?.login, "Burzel72");
 });
+
+test("jobBurn erkennt gleichartige Aufrufe mit wechselnden Parametern", () => {
+  const dir = mkdtempSync(join(tmpdir(), "similar-"));
+  const zeilen: string[] = [];
+  // So lief der echte 276-Schritte-Lauf im Kreis: gleicher Befehl, anderer Suchbegriff.
+  for (const muster of ["^+", "^-", "^-\\s+img", "this.src", "existing", "img.one", "openGallery", "placeholder", "noimg"]) {
+    zeilen.push(JSON.stringify({ type: "tool_use", part: { tool: "shell", state: { status: "completed", input: { command: `cd /work/repo && cat /tmp/pr.diff | grep ${muster}` } } } }));
+  }
+  writeFileSync(join(dir, "agent.jsonl"), zeilen.join("\n"));
+  const b = jobBurn(dir);
+  assert.ok(b.similar >= 8, `similar war ${b.similar}`);
+  // Exakt gleiche Aufrufe sind es nicht — dafür braucht es die grobe Signatur.
+  assert.ok(b.repeat < 8, `repeat war ${b.repeat}`);
+});

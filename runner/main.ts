@@ -48,6 +48,9 @@ export type Config = {
   maxTurnsPerRun?: number;
   /** Wie oft derselbe Werkzeug-Aufruf in den letzten 40 Schritten vorkommen darf, bevor der Lauf als Schleife gilt. */
   maxRepeatCalls?: number;
+  /** Wie oft derselbe Befehl **anfang** (40 Zeichen) in den letzten 40 Aufrufen vorkommen darf.
+   *  Fängt Wiederholungen mit wechselnden Parametern (z. B. immer wieder `grep` auf den Diff). */
+  maxSimilarCalls?: number;
   /** Wie viele Werkzeug-Aufrufe hintereinander fehlschlagen dürfen, bevor der Lauf als Kaskade gilt.
    *  Fängt die Variante ab, die unsere Wiederholungserkennung nicht sieht: derselbe Fehler mit
    *  leicht anderen Argumenten. */
@@ -115,7 +118,7 @@ export function loadConfig(path = CONFIG_PATH): Config {
   const cfg: Config = {
     label: "factory", maxParallel: 2, agent: "opencode", model: "", workflow: "starter-kit", pollSeconds: 60,
     jobTimeoutMinutes: 90, stallMinutes: 15, image: "software-factory-job:latest", dataDir: "/var/lib/software-factory",
-    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5,
+    containerMemory: "3g", maxReworks: 2, maxCostPerRun: 2, maxTurnsPerRun: 250, maxRepeatCalls: 10, maxErrorStreak: 5, maxSimilarCalls: 8,
     maxCostPerDay: 8, maxCostPerIssue: 4, maxRunsPerIssue: 8, maxCostPerDayGlobal: 12,
     phaseLimits: { check: { minutes: 15, turns: 40 }, build: { minutes: 90, turns: 250 }, accept: { minutes: 45, turns: 100 } },
     ...c,
@@ -606,7 +609,7 @@ export function creditProblem(text: string): boolean {
  *  - `repeat`: häufigste identische Werkzeug-Anfrage in den letzten Schritten. Ein Agent, der
  *    denselben Aufruf zwanzigmal wiederholt, macht keine Fortschritte — er hängt in einer
  *    Schleife. Genau das hat 18 $ verbrannt (2591 Aufrufe eines nicht vorhandenen Werkzeugs). */
-export function jobBurn(dir: string): { cost: number; turns: number; repeat: number; repeatSig: string; errorStreak: number } {
+export function jobBurn(dir: string): { cost: number; turns: number; repeat: number; repeatSig: string; errorStreak: number; similar: number } {
   const text = readJobFile(join(dir, "agent.jsonl"), 20_000_000) ?? "";
   let cost = 0;
   let turns = 0;
@@ -629,16 +632,26 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
 
   const WINDOW = 40;
   const sigs: string[] = [];
+  // Zweite Signatur: nur der Anfang des Befehls. Ein Agent, der zwanzigmal denselben Befehl mit
+  // anderem Suchmuster fährt ("grep '^+'", "grep '^-'", …), wiederholt sich — auch wenn keine
+  // Zeile identisch ist. Genau so lief ein Lauf 276 Schritte lang im Kreis.
+  const grob: string[] = [];
   for (const m of text.matchAll(/"tool":"([^"]+)"[\s\S]{0,400}?"(?:command|path|message)":"([^"]{0,200})"/g)) {
     sigs.push(`${m[1]}|${m[2]}`);
+    grob.push(`${m[1]}|${m[2].slice(0, 40)}`);
   }
   const recent = sigs.slice(-WINDOW);
+  const recentGrob = grob.slice(-WINDOW);
+  const countsGrob = new Map<string, number>();
+  for (const s of recentGrob) countsGrob.set(s, (countsGrob.get(s) ?? 0) + 1);
+  let similar = 0;
+  for (const [, n] of countsGrob) if (n > similar) similar = n;
   const counts = new Map<string, number>();
   for (const s of recent) counts.set(s, (counts.get(s) ?? 0) + 1);
   let repeat = 0;
   let repeatSig = "";
   for (const [s, n] of counts) if (n > repeat) { repeat = n; repeatSig = s; }
-  return { cost, turns, repeat, repeatSig, errorStreak };
+  return { cost, turns, repeat, repeatSig, errorStreak, similar };
 }
 
 /** Wertet einen beendeten Container aus und räumt ihn weg. `reason` = Grund, warum der Runner ihn beendet hat. */
@@ -1208,6 +1221,7 @@ async function tick(cfg: Config) {
       const costLimit = cfg.maxCostPerRun ?? 2;
       const turnLimit = pl.turns ?? cfg.maxTurnsPerRun ?? 250;
       const repeatLimit = cfg.maxRepeatCalls ?? 10;
+      const similarLimit = cfg.maxSimilarCalls ?? 8;
       const errorLimit = cfg.maxErrorStreak ?? 5;
 
       // Zweite, unabhängige Kostenmessung beim Anbieter: Sie gilt auch dann, wenn das Parsen der
@@ -1228,6 +1242,7 @@ async function tick(cfg: Config) {
       else if (burn.turns > turnLimit) { art = "schritte"; why = `Schrittbremse für ${c.phase}: ${burn.turns} Schritte (Grenze ${turnLimit}).`; }
       else if (burn.errorStreak >= errorLimit) { art = "fehlerkaskade"; why = `Fehlerkaskade: ${burn.errorStreak} Aufrufe hintereinander fehlgeschlagen (Grenze ${errorLimit}).`; }
       else if (burn.repeat >= repeatLimit) { art = "schleife"; why = `Schleifenbremse: ${burn.repeat} gleiche Aufrufe hintereinander (${burn.repeatSig.split("|")[0]}).`; }
+      else if (burn.similar >= similarLimit) { art = "schleife-aehnlich"; why = `Schleifenbremse: ${burn.similar} gleichartige Aufrufe hintereinander (gleicher Befehl, anderer Parameter).`; }
 
       if (why) {
         log("job:limit", {

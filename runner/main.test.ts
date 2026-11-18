@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact,
+  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact, spent,
   reworksSinceApproval, setFactoryLogin, writeJobFile, type Config,
 } from "./main.ts";
 
@@ -251,4 +251,39 @@ test("jobBurn summiert Kosten und Schritte aus der Agentenausgabe", () => {
   // Leerer Ordner darf nicht werfen.
   const leer = mkdtempSync(join(tmpdir(), "burn-leer-"));
   assert.deepEqual(jobBurn(leer), { cost: 0, turns: 0 });
+});
+
+test("jobBurn erkennt eine Schleife (gleicher Aufruf immer wieder)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "loop-"));
+  const zeilen: string[] = [];
+  // So sah der echte Fehlversuch aus: derselbe Werkzeug-Aufruf, immer wieder.
+  for (let i = 0; i < 15; i++) {
+    zeilen.push(JSON.stringify({ type: "tool_use", part: { tool: "factory-report", state: { status: "error", input: { message: "architecting the fix" } } } }));
+  }
+  // Zwei echte Schritte am Ende, damit das Fenster realistisch ist.
+  zeilen.push(JSON.stringify({ type: "tool_use", part: { tool: "read", state: { input: { path: "/work/repo/a.py" } } } }));
+  zeilen.push(JSON.stringify({ type: "step_finish", part: { cost: 0.01 } }));
+  writeFileSync(join(dir, "agent.jsonl"), zeilen.join("\n"));
+  const b = jobBurn(dir);
+  assert.ok(b.repeat >= 10, `Wiederholungen: ${b.repeat}`);
+  assert.match(b.repeatSig, /^factory-report/);
+  assert.equal(b.turns, 1);
+  assert.ok(Math.abs(b.cost - 0.01) < 1e-9);
+});
+
+test("spent summiert nur heute und nur das gewünschte Projekt", () => {
+  const dir = mkdtempSync(join(tmpdir(), "metrics-"));
+  const heute = new Date().toISOString().slice(0, 10);
+  const zeilen = [
+    { t: `${heute}T08:00:00Z`, repo: "a/b", issue: 1, costUsd: 0.5 },
+    { t: `${heute}T09:00:00Z`, repo: "a/b", issue: 2, costUsd: 0.25 },
+    { t: `${heute}T10:00:00Z`, repo: "x/y", issue: 1, costUsd: 9 },
+    { t: "2020-01-01T10:00:00Z", repo: "a/b", issue: 1, costUsd: 100 },
+    { t: `${heute}T11:00:00Z`, repo: "a/b", issue: 1 },
+  ];
+  writeFileSync(join(dir, "metrics.jsonl"), zeilen.map((z) => JSON.stringify(z)).join("\n"));
+  const cfg = { dataDir: dir } as Config;
+  assert.ok(Math.abs(spent(cfg, "a/b") - 0.75) < 1e-9);
+  assert.ok(Math.abs(spent(cfg, "a/b", 1) - 0.5) < 1e-9);
+  assert.equal(spent(cfg, "c/d"), 0);
 });

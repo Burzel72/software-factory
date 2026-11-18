@@ -250,7 +250,10 @@ test("jobBurn summiert Kosten und Schritte aus der Agentenausgabe", () => {
   assert.ok(Math.abs(b.cost - 0.7575) < 1e-9, `cost war ${b.cost}`);
   // Leerer Ordner darf nicht werfen.
   const leer = mkdtempSync(join(tmpdir(), "burn-leer-"));
-  assert.deepEqual(jobBurn(leer), { cost: 0, turns: 0 });
+  const l = jobBurn(leer);
+  assert.equal(l.cost, 0);
+  assert.equal(l.turns, 0);
+  assert.equal(l.repeat, 0);
 });
 
 test("jobBurn erkennt eine Schleife (gleicher Aufruf immer wieder)", () => {

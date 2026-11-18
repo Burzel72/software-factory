@@ -64,6 +64,14 @@ export type Config = {
   /** Wie viele Läufe ein Auftrag insgesamt bekommen darf — über alle Phasen und alle Auslöser
    *  (Label, Kommentar, Rework). Verhindert "Kommentar → gleicher Fehlschlag → Kommentar". */
   maxRunsPerIssue?: number;
+  /** Instanzen, die eine menschliche Entscheidung **vermitteln** dürfen (z. B. Mika).
+   *  Sie gelten nur, wenn der Kommentar die Entscheidung, den Menschen und die Quelle nennt:
+   *      Freigabe: vermittelt
+   *      Entschieden von: @Burzel72
+   *      Quelle: Telegram 2026-11-18T16:42
+   *  Der Runner kann die Quelle nicht prüfen — die Zeile macht die Kette nachvollziehbar,
+   *  nicht fälschungssicher. Deshalb bewusst nur für Neustart/Antwort/Budget, nie für Merge. */
+  proxyUsers?: string[];
   /** Tagesgrenze über alle Projekte zusammen. */
   maxCostPerDayGlobal?: number;
   /** GitHub-Nutzer, deren Kommentare die Factory als Antwort oder Änderungswunsch annimmt (zusätzlich zum eigenen Login) */
@@ -280,17 +288,20 @@ export function reworksSinceApproval(issue: Issue): number {
 }
 
 /** Kommentare berechtigter Menschen nach dem letzten Kommentar der Factory. */
-export function humanCommentsSinceFactory(cfg: Config, issue: Issue): Comment[] {
+/** Kommentare nach der letzten Fabrik-Meldung, ohne die Fabrik selbst. Grundlage für alles,
+ *  was als menschliche oder vermittelte Anweisung gelten darf. */
+export function commentsSinceFactory(issue: Issue): Comment[] {
   let last = -1;
   issue.comments.forEach((c, i) => { if (isFactoryComment(c)) last = i; });
   return issue.comments.slice(last + 1).filter((c) => {
     if (c.body.includes(MARK)) return false;
     const login = loginOf(c);
-    // Die Fabrik-Identität ist kein Mensch. Ohne diese Zeile könnte ein Agent einen Kommentar
-    // ohne Marker schreiben und sich damit selbst neu starten oder sein Budget freigeben.
-    if (FACTORY_LOGIN && login.toLowerCase() === FACTORY_LOGIN.toLowerCase()) return false;
-    return isTrusted(cfg, login);
+    return !(FACTORY_LOGIN && login.toLowerCase() === FACTORY_LOGIN.toLowerCase());
   });
+}
+
+export function humanCommentsSinceFactory(cfg: Config, issue: Issue): Comment[] {
+  return commentsSinceFactory(issue).filter((c) => isTrusted(cfg, loginOf(c)));
 }
 
 /** Freigabe für einen Budget-Reset. Nur ein Mensch aus allowedUsers darf sie geben, und der
@@ -665,6 +676,28 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   let repeatSig = "";
   for (const [s, n] of counts) if (n > repeat) { repeat = n; repeatSig = s; }
   return { cost, turns, repeat, repeatSig, errorStreak, similar };
+}
+
+/** Eine **vermittelte** Freigabe: Mika (o. ä.) trägt eine Entscheidung ein, die ein Mensch ihm
+ *  mitgeteilt hat (z. B. per Telegram). Gültig nur mit allen drei Angaben — Entscheidung,
+ *  Mensch, Quelle. Der Mensch muss in `allowedUsers` stehen, der Vermittler in `proxyUsers`.
+ *  Der Runner kann die Quelle nicht prüfen: Die Zeile macht die Kette nachvollziehbar, nicht
+ *  fälschungssicher. Deshalb bewusst nur für Neustart, Antwort und Budget — nie für Merge. */
+export function proxyApproval(cfg: Config, comments: Comment[]): { login: string; decidedBy: string; body: Comment } | null {
+  const proxys = (cfg.proxyUsers ?? []).map((u) => u.toLowerCase());
+  const menschen = (cfg.allowedUsers ?? []).map((u) => u.toLowerCase());
+  if (!proxys.length) return null;
+  for (const c of comments) {
+    const login = loginOf(c);
+    if (!proxys.includes(login.toLowerCase())) continue;
+    if (!/^\s*Freigabe:\s*vermittelt\b/im.test(c.body)) continue;
+    const entscheider = c.body.match(/^\s*Entschieden von:\s*@?([A-Za-z0-9-]+)/im);
+    if (!entscheider) continue;
+    if (!menschen.includes(entscheider[1].toLowerCase())) continue;   // nur bekannte Menschen
+    if (!/^\s*Quelle:\s*\S+/im.test(c.body)) continue;                // Herkunft muss genannt sein
+    return { login, decidedBy: entscheider[1], body: c };
+  }
+  return null;
 }
 
 /** Steht am PR ein Abnahmebericht, der zu diesem Lauf gehört? Leitet das Urteil aus dem Text ab.
@@ -1060,10 +1093,15 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
     let prUrl: string | undefined;
     let lost = false;
     const marker = lastFactoryMarker(issue);
-    const answered = humanCommentsSinceFactory(cfg, issue).length > 0;
+    const menschliche = humanCommentsSinceFactory(cfg, issue);
+    const vermittelt = proxyApproval(cfg, commentsSinceFactory(issue));
+    const answered = menschliche.length > 0 || !!vermittelt;
+    if (vermittelt) {
+      log("approval:proxy", { repo, issue: issue.number, vermittler: vermittelt.login, entschiedenVon: vermittelt.decidedBy });
+    }
     // "Budget: neu" im Kommentar setzt die Kostenzählung dieses Auftrags zurück. Gedacht für
     // Fälle, in denen ein Ausreißer die Grenze verbraucht hat, ohne dass Arbeit entstanden ist.
-    const freigabe = budgetApproval(cfg, humanCommentsSinceFactory(cfg, issue));
+    const freigabe = budgetApproval(cfg, menschliche) ?? (vermittelt ? { login: vermittelt.decidedBy, body: vermittelt.body } : null);
     if (answered && freigabe && !resetsDone.has(`${repo}#${issue.number}|${freigabe.body.createdAt}`)) {
       resetsDone.add(`${repo}#${issue.number}|${freigabe.body.createdAt}`);
       try {
@@ -1084,12 +1122,11 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
         // Der Verlauf muss zeigen, wer entschieden hat — sonst ist später nicht nachvollziehbar,
         // ob ein Mensch oder ein Agent am Budget gedreht hat.
         await gh(["issue", "comment", String(issue.number), "-R", repo, "--body",
-          `**Budget für diesen Auftrag zurückgesetzt.**\n\nEntschieden von @${freigabe.login} · Eingetragen von Nio · ${new Date().toISOString()}\n\nEs wird ab jetzt neu gezählt (Auftrag, Projekt und Tag). Die Grenzen selbst bleiben unverändert.`]).catch(() => {});
+          `**Budget für diesen Auftrag zurückgesetzt.**\n\nEntschieden von @${freigabe.login} · Eingetragen von ${vermittelt ? `${vermittelt.login} (vermittelt)` : "Nio"} · ${new Date().toISOString()}\n\nEs wird ab jetzt neu gezählt (Auftrag, Projekt und Tag). Die Grenzen selbst bleiben unverändert.`]).catch(() => {});
       } catch (e) { log("budget:reset-error", { repo, issue: issue.number, error: String(e) }); }
     }
 
-    // Ein Kommentar eines Menschen hebt die Guthaben-Sperre auf — das ist die Bestätigung
-    // "nachgefüllt, bitte weiter".
+    /** Kein Kommentar: Die Sperre hebt nur ein Mensch auf — oder eine vermittelte Freigabe. */
     if (answered && Date.now() < budgetHaltUntil) {
       budgetHaltUntil = 0;
       log("budget:resumed", { repo, issue: issue.number });

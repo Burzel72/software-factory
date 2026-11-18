@@ -73,7 +73,10 @@ while read -r NAME; do
   MIN=$(( ( $(date +%s) - START ) / 60 ))
   [ "$MIN" -lt "$STUCK_MINUTES" ] && continue
   alert "Ein Lauf arbeitet seit ${MIN} Minuten (${NAME}). Grenze: ${STUCK_MINUTES}."
-done < <(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep '^sf-' | grep -v caddy)
+# Nur echte Auftrags-Container: Sie tragen das Label software-factory=1.
+# Vorschauen (sf-preview-*) laufen absichtlich stundenlang und sind kein hängender Lauf —
+# ohne diesen Filter meldet der Wächter sie als "arbeitet seit 380 Minuten".
+done < <(sudo docker ps --filter "label=software-factory=1" --format '{{.Names}}' 2>/dev/null | grep '^sf-')
 
 # --- 3. Je Projekt -----------------------------------------------------------
 for REPO in $REPOS; do

@@ -131,8 +131,9 @@ export function loadConfig(path = CONFIG_PATH): Config {
     // Grenzen aus den gemessenen Werten erfolgreicher Läufe (18.11.2026, metrics.jsonl), plus 50 % Luft.
     // Grundlage: check "approved" n=23 (max 18 Schritte / 3,9 Min), build "accepting" n=25
     // (max 157 / 16,4 Min), accept "review"+"unresolved" n=12 (max 67 / 12,2 Min).
-    // Die Abnahme braucht für größere Aufträge mehr als die gemessenen 67 Schritte — daher 130.
-    phaseLimits: { check: { minutes: 10, turns: 30 }, build: { minutes: 30, turns: 240 }, accept: { minutes: 20, turns: 130 } },
+    // Ausnahmen mit Beleg: Die Abnahme braucht für größere Aufträge mehr als die gemessenen
+    // 67 Schritte (daher 130), und ein Bau in der Nacharbeit kam auf 241 (daher 320).
+    phaseLimits: { check: { minutes: 10, turns: 30 }, build: { minutes: 30, turns: 320 }, accept: { minutes: 20, turns: 130 } },
     ...c,
   };
   // Ohne Modell in der Config: passender Standard je Agent

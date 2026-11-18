@@ -667,6 +667,28 @@ export function jobBurn(dir: string): { cost: number; turns: number; repeat: num
   return { cost, turns, repeat, repeatSig, errorStreak, similar };
 }
 
+/** Steht am PR ein Abnahmebericht, der zu diesem Lauf gehört? Leitet das Urteil aus dem Text ab.
+ *  Nötig, weil Agenten regelmäßig den Bericht schreiben, aber die Meldung an den Runner vergessen. */
+export async function verdictFromReview(repo: string, issue: number, since: string): Promise<string | null> {
+  try {
+    const prs = JSON.parse(await gh(["pr", "list", "-R", repo, "--head", `factory/${issue}`, "--state", "open", "--json", "number"]));
+    if (!prs?.[0]) return null;
+    const rv = JSON.parse(await gh(["pr", "view", String(prs[0].number), "-R", repo, "--json", "reviews"]));
+    const seit = Date.parse(since);
+    const neu = (rv.reviews ?? []).filter((r: any) => {
+      const t = Date.parse(String(r.submittedAt ?? ""));
+      return Number.isFinite(t) ? t >= seit : false;
+    });
+    for (let i = neu.length - 1; i >= 0; i--) {
+      const b = String(neu[i].body ?? "");
+      // Reihenfolge wichtig: "nicht bestanden" enthält auch "bestanden".
+      if (/Abnahme nicht bestanden|nicht bestanden\s*[—-]|Rückgabe \(rework\)|Rework:\s/i.test(b)) return "working";
+      if (/Abnahme bestanden|Fazit[^\n]*bestanden/i.test(b)) return "review";
+    }
+  } catch { /* kein Urteil lesbar */ }
+  return null;
+}
+
 /** Wertet einen beendeten Container aus und räumt ihn weg. `reason` = Grund, warum der Runner ihn beendet hat. */
 async function finish(cfg: Config, c: Container, reason?: string) {
   const dir = jobDir(cfg, c.repo, c.issue);
@@ -688,6 +710,18 @@ async function finish(cfg: Config, c: Container, reason?: string) {
   };
   let problem = reason ?? null;
   let buildOk = false;
+
+  // Abnahme ohne Meldung: Der Bericht steht als Review am PR, aber `factory-report` fehlt.
+  // Dann das Urteil aus dem Bericht ableiten — eine bestandene Abnahme darf nicht als
+  // Fehlschlag enden, nur weil der letzte Aufruf vergessen wurde.
+  if (!problem && c.phase === "accept" && !status.status) {
+    const urteil = await verdictFromReview(c.repo, c.issue, c.startedAt);
+    if (urteil) {
+      status.status = urteil;
+      log("job:review-fallback", { repo: c.repo, issue: c.issue, status: urteil, hinweis: "Urteil aus dem PR-Review gelesen" });
+    }
+  }
+
   // Vor der Bewertung prüfen, ob der Lauf am Guthaben gescheitert ist. Das ist kein Fehler im
   // Auftrag, sondern ein Zustand, der den ganzen Betrieb betrifft.
   const jobText = (readJobFile(join(dir, "agent.jsonl"), 250_000) ?? "") + (readJobFile(join(dir, "agent.err"), 5_000) ?? "");

@@ -542,12 +542,23 @@ export function spent(cfg: Config, repo: string, issue?: number): number {
   const file = join(cfg.dataDir, "metrics.jsonl");
   if (!existsSync(file)) return 0;
   const today = new Date().toISOString().slice(0, 10);
+  // Ein Mensch kann die Zählung für einen Auftrag neu starten ("Budget: neu" im Kommentar) —
+  // nötig, wenn ein Ausreißer (z. B. eine Schleife) die Grenze verbraucht hat, ohne dass
+  // Arbeit entstanden ist. Sonst wäre die Grenze eine Strafe für einen Defekt.
+  let abStand: string | null = null;
+  if (issue !== undefined) {
+    try {
+      const resets = JSON.parse(readFileSync(join(cfg.dataDir, "budget-resets.json"), "utf8"));
+      abStand = resets[`${repo}#${issue}`] ?? null;
+    } catch { /* keine Resets */ }
+  }
   let sum = 0;
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
     let d: any;
     try { d = JSON.parse(line); } catch { continue; }
     if (!String(d.t ?? "").startsWith(today)) continue;
+    if (abStand && String(d.t ?? "") < abStand) continue;
     if (repo !== "*" && d.repo !== repo) continue;
     if (issue !== undefined && d.issue !== issue) continue;
     sum += Number(d.costUsd) || 0;
@@ -960,6 +971,20 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
     let lost = false;
     const marker = lastFactoryMarker(issue);
     const answered = humanCommentsSinceFactory(cfg, issue).length > 0;
+    // "Budget: neu" im Kommentar setzt die Kostenzählung dieses Auftrags zurück. Gedacht für
+    // Fälle, in denen ein Ausreißer die Grenze verbraucht hat, ohne dass Arbeit entstanden ist.
+    if (answered && humanCommentsSinceFactory(cfg, issue).some((c) => /^\s*Budget:\s*neu\b/im.test(c.body))) {
+      try {
+        const f = join(cfg.dataDir, "budget-resets.json");
+        const resets = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {};
+        resets[`${repo}#${issue.number}`] = new Date().toISOString();
+        writeFileSync(f, JSON.stringify(resets, null, 2));
+        budgetNotified.delete(`issue|${repo}#${issue.number}`);
+        budgetNotified.delete(`runs|${repo}#${issue.number}`);
+        log("budget:reset", { repo, issue: issue.number });
+      } catch (e) { log("budget:reset-error", { repo, issue: issue.number, error: String(e) }); }
+    }
+
     // Ein Kommentar eines Menschen hebt die Guthaben-Sperre auf — das ist die Bestätigung
     // "nachgefüllt, bitte weiter".
     if (answered && Date.now() < budgetHaltUntil) {

@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, lstat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact, runsToday, spent,
+  budgetApproval, buildPrompt, caddyConfig, creditProblem, humanCommentsSinceFactory, jobBurn, lastFactoryMarker, readJobFile, redact, runsToday, spent,
   reworksSinceApproval, setFactoryLogin, writeJobFile, type Config,
 } from "./main.ts";
 
@@ -311,4 +311,23 @@ test("runsToday und spent(*) zählen projektübergreifend", () => {
   const cfg = { dataDir: dir } as Config;
   assert.equal(runsToday(cfg, "a/b", 7), 2);
   assert.ok(Math.abs(spent(cfg, "*") - 1.5) < 1e-9);
+});
+
+test("Die Fabrik kann sich nicht selbst Budget geben oder neu starten", () => {
+  setFactoryLogin("elison-fac");
+  // Selbst wenn jemand die Fabrik-Identität in allowedUsers einträgt: sie bleibt der Agent.
+  const konf = cfg({ allowedUsers: ["elison-fac"] });
+  const i = issue([c("elison-fac", "Budget: neu\nEntschieden von: @elison-fac")]);
+  assert.equal(humanCommentsSinceFactory(konf, i).length, 0);
+  assert.equal(budgetApproval(konf, humanCommentsSinceFactory(konf, i)), null);
+});
+
+test("Budget-Reset braucht einen Menschen, der sich selbst als Entscheider nennt", () => {
+  setFactoryLogin("elison-fac");
+  const konf = cfg({ allowedUsers: ["Burzel72"] });
+  assert.equal(budgetApproval(konf, [c("Burzel72", "Budget: neu")]), null);                              // ohne Nennung
+  assert.equal(budgetApproval(konf, [c("Burzel72", "Budget: neu\nEntschieden von: @Fremd")]), null);      // nennt anderen
+  assert.equal(budgetApproval(konf, [c("Fremd", "Budget: neu\nEntschieden von: @Fremd")]), null);         // nicht berechtigt
+  const ok = budgetApproval(konf, [c("Burzel72", "Budget: neu\nEntschieden von: @Burzel72")]);
+  assert.equal(ok?.login, "Burzel72");
 });

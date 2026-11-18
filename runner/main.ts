@@ -280,7 +280,35 @@ export function reworksSinceApproval(issue: Issue): number {
 export function humanCommentsSinceFactory(cfg: Config, issue: Issue): Comment[] {
   let last = -1;
   issue.comments.forEach((c, i) => { if (isFactoryComment(c)) last = i; });
-  return issue.comments.slice(last + 1).filter((c) => !c.body.includes(MARK) && isTrusted(cfg, loginOf(c)));
+  return issue.comments.slice(last + 1).filter((c) => {
+    if (c.body.includes(MARK)) return false;
+    const login = loginOf(c);
+    // Die Fabrik-Identität ist kein Mensch. Ohne diese Zeile könnte ein Agent einen Kommentar
+    // ohne Marker schreiben und sich damit selbst neu starten oder sein Budget freigeben.
+    if (FACTORY_LOGIN && login.toLowerCase() === FACTORY_LOGIN.toLowerCase()) return false;
+    return isTrusted(cfg, login);
+  });
+}
+
+/** Freigabe für einen Budget-Reset. Nur ein Mensch aus allowedUsers darf sie geben, und der
+ *  Kommentar muss den Entscheider selbst nennen — damit im Verlauf steht, wer entschieden hat.
+ *  Format:
+ *      Budget: neu
+ *      Entschieden von: @Burzel72
+ *  Rückgabe: Login des Entscheiders, oder null (mit Grund in `why`). */
+export function budgetApproval(cfg: Config, comments: Comment[]): { login: string; body: Comment } | null {
+  const erlaubt = (cfg.allowedUsers ?? []).map((u) => u.toLowerCase());
+  for (const c of comments) {
+    if (!/^\s*Budget:\s*neu\b/im.test(c.body)) continue;
+    const login = loginOf(c);
+    if (!erlaubt.includes(login.toLowerCase())) continue;                 // kein Mensch aus der Liste
+    if (FACTORY_LOGIN && login.toLowerCase() === FACTORY_LOGIN.toLowerCase()) continue; // der Agent selbst
+    const m = c.body.match(/^\s*Entschieden von:\s*@?([A-Za-z0-9-]+)/im);
+    if (!m) continue;                                                      // Entscheider nicht genannt
+    if (m[1].toLowerCase() !== login.toLowerCase()) continue;              // nennt jemand anderen
+    return { login, body: c };
+  }
+  return null;
 }
 
 async function findPr(repo: string, n: number, state: "open" | "merged" | "all") {
@@ -498,6 +526,8 @@ async function checkBuild(repo: string, issue: number, dir: string, prUrl?: stri
 let budgetHaltUntil = 0;
 /** Verhindert, dass dieselbe Budget-Meldung bei jedem Durchlauf erneut am Issue landet. */
 const budgetNotified = new Set<string>();
+/** Verhindert, dass dieselbe Freigabe mehrfach eingetragen wird. */
+const resetsDone = new Set<string>();
 
 /** Verbrauch beim Anbieter selbst abfragen — unabhängig vom Parsen der Agentenausgabe.
  *  Die Kostenbremse darf nicht davon abhängen, dass der Agent sein Ausgabeformat beibehält:
@@ -973,7 +1003,9 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
     const answered = humanCommentsSinceFactory(cfg, issue).length > 0;
     // "Budget: neu" im Kommentar setzt die Kostenzählung dieses Auftrags zurück. Gedacht für
     // Fälle, in denen ein Ausreißer die Grenze verbraucht hat, ohne dass Arbeit entstanden ist.
-    if (answered && humanCommentsSinceFactory(cfg, issue).some((c) => /^\s*Budget:\s*neu\b/im.test(c.body))) {
+    const freigabe = budgetApproval(cfg, humanCommentsSinceFactory(cfg, issue));
+    if (answered && freigabe && !resetsDone.has(`${repo}#${issue.number}|${freigabe.body.createdAt}`)) {
+      resetsDone.add(`${repo}#${issue.number}|${freigabe.body.createdAt}`);
       try {
         const f = join(cfg.dataDir, "budget-resets.json");
         const resets = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {};
@@ -988,7 +1020,11 @@ async function tickRepo(cfg: Config, repo: string, containers: Container[], slot
         budgetNotified.delete(`runs|${repo}#${issue.number}`);
         budgetNotified.delete(`day|${repo}`);
         budgetNotified.delete("global");
-        log("budget:reset", { repo, issue: issue.number });
+        log("budget:reset", { repo, issue: issue.number, entschiedenVon: freigabe.login });
+        // Der Verlauf muss zeigen, wer entschieden hat — sonst ist später nicht nachvollziehbar,
+        // ob ein Mensch oder ein Agent am Budget gedreht hat.
+        await gh(["issue", "comment", String(issue.number), "-R", repo, "--body",
+          `**Budget für diesen Auftrag zurückgesetzt.**\n\nEntschieden von @${freigabe.login} · Eingetragen von Nio · ${new Date().toISOString()}\n\nEs wird ab jetzt neu gezählt (Auftrag, Projekt und Tag). Die Grenzen selbst bleiben unverändert.`]).catch(() => {});
       } catch (e) { log("budget:reset-error", { repo, issue: issue.number, error: String(e) }); }
     }
 

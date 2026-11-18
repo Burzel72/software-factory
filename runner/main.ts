@@ -591,7 +591,15 @@ export function spent(cfg: Config, repo: string, issue?: number): number {
     let d: any;
     try { d = JSON.parse(line); } catch { continue; }
     if (!String(d.t ?? "").startsWith(today)) continue;
-    if (abStand && String(d.t ?? "") < abStand) continue;
+    // Kosten werden am Laufende gebucht. Ein Reset muss aber ab Laufbeginn gelten — sonst zählt
+    // ein Lauf, der vor der Freigabe gestartet ist, nachträglich wieder mit (so passiert: der
+    // 18-$-Lauf begann 12:44, wurde aber erst 14:1x verbucht).
+    if (abStand) {
+      const ende = Date.parse(String(d.started ?? d.t ?? ""));
+      const dauer = Number(d.seconds) || 0;
+      const beginn = Number.isFinite(ende) ? ende - dauer * 1000 : NaN;
+      if (Number.isFinite(beginn) && beginn < Date.parse(abStand)) continue;
+    }
     if (repo !== "*" && d.repo !== repo) continue;
     if (issue !== undefined && d.issue !== issue) continue;
     sum += Number(d.costUsd) || 0;
@@ -731,7 +739,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
   // Dauerhaft festhalten, auch nach dem Aufräumen: Grundlage für factory-stats
   const seconds = Math.max(0, Math.round((Date.parse(c.finishedAt) - Date.parse(c.startedAt)) / 1000));
   appendFileSync(join(cfg.dataDir, "metrics.jsonl"), JSON.stringify({
-    t: new Date().toISOString(), repo: c.repo, issue: c.issue, phase: c.phase, mode: c.mode,
+    t: new Date().toISOString(), started: c.startedAt, repo: c.repo, issue: c.issue, phase: c.phase, mode: c.mode,
     status: metricStatus, exitCode: c.exitCode, seconds: Number.isFinite(seconds) ? seconds : null,
     turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null, model: repoJob(cfg, c.repo, c.phase).model,
   }) + "\n");

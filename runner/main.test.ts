@@ -169,8 +169,8 @@ setSpawn(((cmd: string[], opts: any) => {
     };
 }) as any);
 
-async function finishRun(phase: "check" | "build" | "accept", files: Record<string, string>, exitCode = 0, reason?: string) {
-  const config = cfg();
+async function finishRun(phase: "check" | "build" | "accept", files: Record<string, string>, exitCode = 0, reason?: string, vorgegeben?: Config) {
+  const config = vorgegeben ?? cfg();
   const dir = join(config.dataDir, "jobs", "a__b__7");
   mkdirSync(dir, { recursive: true });
   for (const [f, content] of Object.entries(files)) writeFileSync(join(dir, f), content);
@@ -183,16 +183,32 @@ async function finishRun(phase: "check" | "build" | "accept", files: Record<stri
 }
 const result = (extra = {}) => JSON.stringify({ type: "result", result: "fertig", num_turns: 3, ...extra }) + "\n";
 
-test("Bau ohne Prüfergebnis gilt nicht als gebaut", async () => {
+test("Bau ohne Prüfergebnis: der Runner prüft selbst und startet eine Nachbesserung", async () => {
   const r = await finishRun("build", { "status.json": '{"status":"accepting","pr":"https://x/pull/1"}', "claude.jsonl": result() });
-  assert.equal(r.metric.status, "failed");
-  assert.ok(r.failedComment.includes("Pflicht-Checks"));
+  // Kein verify.json: der Runner führt die Checks selbst aus (ohne Modell). In der Testumgebung
+  // gibt es kein Docker, also lautet der Befund "konnte nicht ausführen" — in beiden Fällen ist
+  // das kein Fehlschlag, sondern eine automatische Nachbesserung mit echtem Messergebnis.
+  assert.equal(r.metric.status, "rework");
+  assert.ok(/Nachbesserung|Pflichtprüfung|Pflicht-Checks/.test(r.failedComment), r.failedComment.slice(0, 200));
 });
 
-test("Bau mit grünen Checks auf einem älteren Commit gilt nicht als gebaut", async () => {
+test("Zwei Nachbesserungen, dann entscheidet der Mensch", async () => {
+  const config = cfg();
+  mkdirSync(join(config.dataDir, "state"), { recursive: true });
+  writeFileSync(join(config.dataDir, "state", "a__b__7.json"), JSON.stringify({ verifyReworks: 2 }));
+  const r = await finishRun("build", { "status.json": '{"status":"accepting","pr":"https://x/pull/1"}', "claude.jsonl": result() }, 0, undefined, config);
+  assert.equal(r.metric.status, "failed");
+  assert.ok(/Pflichtprüfung|Pflicht-Checks/.test(r.failedComment), r.failedComment.slice(0, 200));
+});
+
+test("Veraltete Prüfung: der Runner prüft den gepushten Commit selbst", async () => {
+  // verify.json gehört zu einem anderen Commit. Statt die Arbeit zu verwerfen, prüft der Runner
+  // selbst (ohne Modell). In der Testumgebung fehlt Docker, deshalb endet es in einer
+  // Nachbesserung — niemals aber in "gebaut ohne Nachweis".
   const verify = JSON.stringify({ sha: "0000000", ok: true, results: [{ name: "lint", exit: 0 }] });
   const r = await finishRun("build", { "status.json": '{"status":"accepting","pr":"https://x/pull/1"}', "verify.json": verify, "claude.jsonl": result() });
-  assert.equal(r.metric.status, "failed");
+  assert.equal(r.metric.status, "rework");
+  assert.ok(/Pflichtprüfung/.test(r.failedComment), r.failedComment.slice(0, 160));
 });
 
 test("Bau mit grünen Checks auf dem gepushten Commit geht in die Abnahme", async () => {

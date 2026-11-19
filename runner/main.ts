@@ -6,9 +6,10 @@
 
 import {
   appendFileSync, closeSync, constants, existsSync, fchownSync, fstatSync, mkdirSync, openSync, readFileSync, readSync,
-  rmSync, statSync, writeFileSync, writeSync, chownSync,
+  rmSync, statSync, writeFileSync, writeSync, chownSync, mkdtempSync,
 } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 /** Ein Projekt: Kurzform als String, oder als Objekt mit eigenem Modell und Zugang. */
 export type RepoConfig = {
@@ -239,7 +240,7 @@ export function redact(text: string): string {
 
 // ---------- Dauerhafter Zustand pro Issue (nur für den Runner) ----------
 
-type IssueState = { lostRetries?: number };
+type IssueState = { lostRetries?: number; verifyReworks?: number };
 const stateFile = (cfg: Config, repo: string, n: number) => join(cfg.dataDir, "state", `${repo.replace("/", "__")}__${n}.json`);
 function getState(cfg: Config, repo: string, n: number): IssueState {
   try { return JSON.parse(readFileSync(stateFile(cfg, repo, n), "utf8")); } catch { return {}; }
@@ -520,18 +521,51 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
 }
 
 /** Nach einem Bau-Lauf: Sind die Pflicht-Checks auf genau dem gepushten Stand grün und ist die Spec unverändert? */
-async function checkBuild(repo: string, issue: number, dir: string, prUrl?: string): Promise<string | null> {
-  const verify = readJobJson(join(dir, "verify.json"));
-  if (!verify || verify.ok !== true || !Array.isArray(verify.results) || verify.results.length === 0) {
-    return "Die Pflicht-Checks wurden nicht ausgeführt oder sind nicht grün (`factory-verify`).";
+/** Pflichtprüfung durch den Runner selbst — **ohne Modell**.
+ *  Der Agent *behauptet* `factory-verify` oft nur (am 19.11. dreimal an einem Morgen), also
+ *  prüft der Runner den gepushten Branch selbst: Container klont ihn, führt die Checks aus.
+ *  Kosten: ein paar Sekunden Rechenzeit, keine Tokens. */
+async function runnerVerify(cfg: Config, repo: string, issue: number): Promise<{ ok: boolean; text: string }> {
+  const tmp = mkdtempSync(join(tmpdir(), `fv-${repo.replace(/[^a-z0-9]+/gi, "-")}-${issue}-`));
+  try {
+    const image = await imageFor(cfg, repo);
+    const ghToken = (await gh(["auth", "token"])).trim();
+    await docker(["run", "--rm", "-e", `REPO=${repo}`, "-e", `BRANCH=factory/${issue}`, "-e", "GH_TOKEN",
+      "-v", `${tmp}:/work`, "--entrypoint", "bash", image, "-c",
+      `gh auth setup-git >/dev/null && gh repo clone "$REPO" /work/repo -- --quiet --depth 1 --branch "$BRANCH" && factory-verify /work/repo`],
+      { GH_TOKEN: ghToken });
+    const v = readJobJson(join(tmp, "verify.json"));
+    if (!v) return { ok: false, text: "Der Runner konnte die Pflichtprüfung nicht ausführen (kein Ergebnis)." };
+    const rot = (Array.isArray(v.results) ? v.results : [])
+      .filter((r: any) => Number(r.exit) !== 0)
+      .map((r: any) => `${r.name} (Exit ${r.exit})${r.tail ? ":\n" + String(r.tail).slice(0, 600) : ""}`)
+      .join("\n\n");
+    return { ok: v.ok === true, text: rot || "Die Checks sind rot, ohne Ausgabe." };
+  } catch (e) {
+    return { ok: false, text: `Der Runner konnte die Pflichtprüfung nicht ausführen: ${(e as Error).message}` };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+async function checkBuild(cfg: Config, repo: string, issue: number, dir: string, prUrl?: string): Promise<string | null> {
+  const verify = readJobJson(join(dir, "verify.json"));
   let head = "";
   try { head = (await gh(["api", `repos/${repo}/git/ref/heads/factory/${issue}`, "--jq", ".object.sha"])).trim(); } catch {}
   if (!head) return `Der Branch \`factory/${issue}\` wurde nicht gepusht.`;
-  if (verify.sha !== head) return `Die Checks liefen auf \`${String(verify.sha).slice(0, 7)}\`, gepusht ist aber \`${head.slice(0, 7)}\`. Nach dem letzten Commit muss \`factory-verify\` erneut laufen.`;
+  // Fehlt die Prüfung oder lief sie auf einem anderen Commit, prüft der Runner selbst — statt die
+  // Arbeit wegen einer vergessenen Meldung zu verwerfen.
+  const brauchbar = verify && verify.ok === true && Array.isArray(verify.results) && verify.results.length > 0 && verify.sha === head;
+  if (!brauchbar) {
+    const eigene = await runnerVerify(cfg, repo, issue);
+    log("verify:runner", { repo, issue, ok: eigene.ok, grund: verify ? "veraltet oder unvollständig" : "vom Agenten nicht ausgeführt" });
+    if (!eigene.ok) {
+      return `Die Pflichtprüfung ist rot — der Runner hat sie auf \`${head.slice(0, 7)}\` selbst ausgeführt:\n\`\`\`\n${eigene.text}\n\`\`\``;
+    }
+  }
   // Ein Branch, der main nicht enthält, kann beim Merge Funktionen verwerfen, die inzwischen
   // gemergt wurden. Dann gilt: erst main einnehmen, dann erneut prüfen.
-  if (verify.upToDate === false) {
+  if (verify?.upToDate === false) {
     return "Der Branch enthält `main` nicht. Bitte `git fetch origin && git merge origin/main`, Konflikte auflösen (bestehende Funktionen erhalten), dann `factory-verify` erneut ausführen.";
   }
   if (prUrl) {
@@ -805,7 +839,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     // Meldung — Pflicht-Checks auf genau dem gepushten Stand, `main` enthalten, Spec unberührt.
     if (c.phase === "build" && c.exitCode === 0 && !result.is_error) {
       const pr = status.pr ?? (await findPr(c.repo, c.issue, "open"))?.url;
-      const befund = await checkBuild(c.repo, c.issue, dir, pr);
+      const befund = await checkBuild(cfg, c.repo, c.issue, dir, pr);
       if (befund) {
         problem = `Der Lauf hat kein Ergebnis gemeldet, und die Arbeit ist nicht abgeschlossen: ${befund}`;
       } else {
@@ -822,14 +856,31 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     const was = cfg.agent === "claude" ? "Claude Code" : "OpenCode";
     problem = `${was} wurde mit einem Fehler beendet (Exit-Code ${c.exitCode}).`;
   }
-  if (!problem && !buildOk && c.phase === "build" && status.status === "accepting") problem = await checkBuild(c.repo, c.issue, dir, status.pr);
+  if (!problem && !buildOk && c.phase === "build" && status.status === "accepting") problem = await checkBuild(cfg, c.repo, c.issue, dir, status.pr);
   if (outOfCredit) {
     budgetHaltUntil = Date.now() + 60 * 60 * 1000;
     problem = "Guthaben beim Modellanbieter aufgebraucht (402). Die Fabrik hält an, bis das Guthaben aufgefüllt ist — sie startet von selbst keinen neuen Lauf. Nach dem Auffüllen im Issue kommentieren, das hebt die Sperre auf.";
     log("budget:halt", { repo: c.repo, issue: c.issue, until: new Date(budgetHaltUntil).toISOString() });
   }
-  const ended = !problem;
-  const metricStatus = ended ? (status.status === "review" && status.unresolved ? "unresolved" : status.status) : "failed";
+  // Pflichtprüfung rot? Dann bekommt der Agent den **echten** Fehlertext und eine zweite Chance —
+  // automatisch, aber höchstens zweimal je Auftrag. Danach entscheidet der Mensch. Das ist die
+  // Leitplanke: begrenzte Selbstkorrektur statt Dauerlauf (maxReworks bleibt bei 2).
+  let verifyRework = false;
+  let verifyRunde = 0;
+  let verifyBefund = "";
+  if (problem && c.phase === "build" && /Pflichtprüfung|Pflicht-Checks/.test(problem)) {
+    const st = getState(cfg, c.repo, c.issue);
+    verifyRunde = (st.verifyReworks ?? 0) + 1;
+    if (verifyRunde <= 2) {
+      setState(cfg, c.repo, c.issue, { ...st, verifyReworks: verifyRunde });
+      verifyRework = true;
+      verifyBefund = problem;
+      log("verify:rework", { repo: c.repo, issue: c.issue, runde: verifyRunde, grund: problem.slice(0, 200) });
+      problem = null; // kein Fehlschlag — Nacharbeit im selben Branch
+    }
+  }
+  const ended = !problem && !verifyRework;
+  const metricStatus = verifyRework ? "rework" : ended ? (status.status === "review" && status.unresolved ? "unresolved" : status.status) : "failed";
 
   log("job:finished", {
     repo: c.repo, issue: c.issue, phase: c.phase, exitCode: c.exitCode, status: metricStatus, problem,
@@ -856,6 +907,19 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null, model: repoJob(cfg, c.repo, c.phase).model,
   }) + "\n");
 
+  if (verifyRework) {
+    const issue = JSON.parse(await gh(["issue", "view", String(c.issue), "-R", c.repo, "--json", "number,title,body,url,labels,comments"]));
+    await setStage(c.repo, issue, "working");
+    await syncBoard(cfg, issue.url, "working");
+    await comment(c.repo, c.issue, "verify:rework",
+      `### 🔁 Pflichtprüfung rot — automatische Nachbesserung (${verifyRunde} von 2)\n\n` +
+      `${verifyBefund.replace(/```/g, "'''")}\n\n` +
+      `Der Runner prüft selbst, ohne Modell — diese Meldung ist ein Messergebnis, keine Behauptung. ` +
+      `Behebe den Fehler im selben Branch (\`factory/${c.issue}\`), dann \`factory-verify\` und \`factory-report built\`.\n\n` +
+      `_Nach zwei Runden entscheidet ein Mensch._`);
+    await docker(["rm", "-f", c.name]).catch(() => {});
+    return;
+  }
   if (ended) {
     setState(cfg, c.repo, c.issue, {});
   } else {

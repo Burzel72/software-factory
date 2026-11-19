@@ -527,6 +527,9 @@ async function launch(cfg: Config, repo: string, issue: Issue, phase: Phase, mod
  *  Kosten: ein paar Sekunden Rechenzeit, keine Tokens. */
 async function runnerVerify(cfg: Config, repo: string, issue: number): Promise<{ ok: boolean; text: string }> {
   const tmp = mkdtempSync(join(tmpdir(), `fv-${repo.replace(/[^a-z0-9]+/gi, "-")}-${issue}-`));
+  // Der Container läuft als pwuser, nicht als der Runner-Benutzer: ohne diese Übergabe darf er
+  // im eingehängten Ordner nichts anlegen ("could not create work tree dir '/work/repo'").
+  chownSync(tmp, CONTAINER_UID, CONTAINER_UID);
   try {
     const image = await imageFor(cfg, repo);
     const ghToken = (await gh(["auth", "token"])).trim();

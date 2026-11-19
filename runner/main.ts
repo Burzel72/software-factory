@@ -569,6 +569,18 @@ async function checkBuild(cfg: Config, repo: string, issue: number, dir: string,
     return "Der Branch enthält `main` nicht. Bitte `git fetch origin && git merge origin/main`, Konflikte auflösen (bestehende Funktionen erhalten), dann `factory-verify` erneut ausführen.";
   }
   if (prUrl) {
+    // GitHub verknüpft einen PR nur mit dem Auftrag, wenn im PR-Text `Closes #N` steht — und zwar
+    // zum Zeitpunkt des Merges. Ohne den Satz fehlt am Issue jeder Hinweis auf den PR (#27, #25).
+    // Der Runner ergänzt ihn deshalb selbst; kein Modell, keine Nacharbeit.
+    try {
+      const body = (await gh(["pr", "view", prUrl, "--json", "body", "--jq", ".body"])).trim();
+      if (!new RegExp(`(closes|fixes|resolves)\\s+#${issue}\\b`, "i").test(body)) {
+        const ziel = join(dir, "pr-body.md");
+        writeFileSync(ziel, `${body}\n\nCloses #${issue}\n`);
+        await gh(["pr", "edit", prUrl, "--body-file", ziel]);
+        log("pr:closes-link", { repo, issue, pr: prUrl, ergaenzt: true });
+      }
+    } catch (e) { log("pr:closes-link", { repo, issue, fehler: String(e).slice(0, 120) }); }
     try {
       const files = (await gh(["pr", "diff", prUrl, "--name-only"])).split("\n");
       const spec = files.find((f) => /^features\/[^/]+\/spec\.md$/.test(f.trim()));

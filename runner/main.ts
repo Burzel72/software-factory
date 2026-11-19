@@ -922,6 +922,20 @@ async function finish(cfg: Config, c: Container, reason?: string) {
     turns: result.num_turns ?? null, costUsd: result.total_cost_usd ?? null, model: repoJob(cfg, c.repo, c.phase).model,
   }) + "\n");
 
+  // Kosten je Lauf am Issue sichtbar machen (Fabrik-Issue #4): Der Agent kennt seine Kosten nicht,
+  // der Runner schon. Eine knappe Zeile, als letzte Meldung eines Laufs.
+  const postStats = async () => {
+    try {
+      const sek = result.duration_ms ? Math.round(result.duration_ms / 1000) : null;
+      const eur = Number(result.total_cost_usd);
+      const teile = [`Phase **${c.phase}**`];
+      if (result.num_turns) teile.push(`${result.num_turns} Schritte`);
+      if (Number.isFinite(eur)) teile.push(`${eur.toFixed(3).replace(".", ",")} $`);
+      if (sek !== null) teile.push(`${Math.floor(sek / 60)}:${String(sek % 60).padStart(2, "0")} Min`);
+      await comment(c.repo, c.issue, "stats", `_Lauf-Statistik: ${teile.join(" · ")}_`);
+    } catch (e) { log("stats:error", { repo: c.repo, issue: c.issue, fehler: String(e).slice(0, 120) }); }
+  };
+
   if (verifyRework) {
     const issue = JSON.parse(await gh(["issue", "view", String(c.issue), "-R", c.repo, "--json", "number,title,body,url,labels,comments"]));
     await setStage(c.repo, issue, "working");
@@ -932,6 +946,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
       `Der Runner prüft selbst, ohne Modell — diese Meldung ist ein Messergebnis, keine Behauptung. ` +
       `Behebe den Fehler im selben Branch (\`factory/${c.issue}\`), dann \`factory-verify\` und \`factory-report built\`.\n\n` +
       `_Nach zwei Runden entscheidet ein Mensch._`);
+    await postStats();
     await docker(["rm", "-f", c.name]).catch(() => {});
     return;
   }
@@ -949,6 +964,7 @@ async function finish(cfg: Config, c: Container, reason?: string) {
       (detail ? "Letzte Ausgabe:\n```\n" + detail + "\n```\n\n" : "") +
       `_Schreib einen Kommentar mit einem Hinweis, dann versucht die Factory es erneut._`);
   }
+  await postStats();
   await docker(["rm", "-f", c.name]).catch(() => {});
 }
 

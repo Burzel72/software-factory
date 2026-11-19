@@ -178,8 +178,11 @@ async function finishRun(phase: "check" | "build" | "accept", files: Record<stri
   await finish(config, { name: "sf-a-b-7", repo: "a/b", issue: 7, phase, mode: "new", running: false,
     startedAt: "2026-11-11T10:00:00Z", finishedAt: "2026-11-11T10:05:00Z", exitCode }, reason);
   const metric = JSON.parse(readFileSync(join(config.dataDir, "metrics.jsonl"), "utf8").trim());
-  const failedComment = calls.find((x) => x.cmd[1] === "issue" && x.cmd[2] === "comment")?.stdin ?? "";
-  return { metric, failedComment, dir };
+  // Nur Fehlschlag-Meldungen: seit Issue #4 postet der Runner zusätzlich eine Lauf-Statistik.
+  const alleKommentare = calls.filter((x) => x.cmd[1] === "issue" && x.cmd[2] === "comment").map((x) => x.stdin);
+  const failedComment = alleKommentare.find((t) => /software-factory:failed|Der Lauf wurde ohne gültiges Ergebnis/.test(t)) ?? "";
+  const alle = alleKommentare.join("\n---\n");
+  return { metric, failedComment, alle, dir };
 }
 const result = (extra = {}) => JSON.stringify({ type: "result", result: "fertig", num_turns: 3, ...extra }) + "\n";
 
@@ -189,7 +192,7 @@ test("Bau ohne Prüfergebnis: der Runner prüft selbst und startet eine Nachbess
   // gibt es kein Docker, also lautet der Befund "konnte nicht ausführen" — in beiden Fällen ist
   // das kein Fehlschlag, sondern eine automatische Nachbesserung mit echtem Messergebnis.
   assert.equal(r.metric.status, "rework");
-  assert.ok(/Nachbesserung|Pflichtprüfung|Pflicht-Checks/.test(r.failedComment), r.failedComment.slice(0, 200));
+  assert.ok(/Nachbesserung|Pflichtprüfung|Pflicht-Checks/.test(r.alle), r.alle.slice(0, 200));
 });
 
 test("Zwei Nachbesserungen, dann entscheidet der Mensch", async () => {
@@ -208,7 +211,7 @@ test("Veraltete Prüfung: der Runner prüft den gepushten Commit selbst", async 
   const verify = JSON.stringify({ sha: "0000000", ok: true, results: [{ name: "lint", exit: 0 }] });
   const r = await finishRun("build", { "status.json": '{"status":"accepting","pr":"https://x/pull/1"}', "verify.json": verify, "claude.jsonl": result() });
   assert.equal(r.metric.status, "rework");
-  assert.ok(/Pflichtprüfung/.test(r.failedComment), r.failedComment.slice(0, 160));
+  assert.ok(/Pflichtprüfung/.test(r.alle), r.alle.slice(0, 160));
 });
 
 test("Bau mit grünen Checks auf dem gepushten Commit geht in die Abnahme", async () => {
